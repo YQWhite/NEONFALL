@@ -52,11 +52,11 @@ jobs:
         shell: pwsh
         run: |
           $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          powershell -NoProfile -File tools\package-win.ps1 -OutputName "NEONFALL-$ver-win-x64"
+          & .\tools\package-win.ps1 -OutputName "NEONFALL-$ver-win-x64"
 
       - name: Build Android APK
         shell: pwsh
-        run: powershell -NoProfile -File tools\build-android.ps1 -Online
+        run: & .\tools\build-android.ps1 -Online
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
