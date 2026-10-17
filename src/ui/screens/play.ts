@@ -3,15 +3,14 @@ import { Screen } from '../app.ts';
 import { THEME, text, neonText, fillPanel, drawProgress, paragraph } from '../theme.ts';
 import { tr } from '../i18n.ts';
 import { skinBounds } from '../skin-art.ts';
-import { readNFM, readNFSK, type NFMArchive } from '../../core/nfm.ts';
+import { readNFM, type NFMArchive } from '../../core/nfm.ts';
 import { PlaySession } from '../../engine/play.ts';
 import { PlayfieldRenderer } from '../../engine/render.ts';
 import type { ChartEntry } from '../../core/store.ts';
-import type { NFSkin } from '../../core/types.ts';
 import { fmtTime, findCI } from '../../core/zip.ts';
 import { selectSkinForKeys } from '../../core/osk.ts';
 import type { SBPass } from '../../core/storyboard.ts';
-import { getDefaultSkin } from '../../core/default-skin.ts';
+import { resolveSelectedSkin } from '../../core/skin-selection.ts';
 import { scoreSync } from '../../api/score-sync.ts';
 import { laneAtPoint } from '../../engine/lane-geometry.ts';
 
@@ -56,28 +55,10 @@ export class PlayScreen extends Screen {
       archive.chart.id = entry.id;
       this.statusPct = 0.35;
 
-      // selected skin
-      let skin: NFSkin | null = null;
-      let skinFiles: Map<string, Uint8Array> | null = null;
-      const skinId = this.app.settings.skinId;
-      if (skinId) {
-        const skBytes = await this.app.store.getSkinBytes(skinId);
-        if (!current()) return;
-        if (skBytes) {
-          try {
-            const parsed = readNFSK(skBytes);
-            skin = parsed.skin;
-            skinFiles = parsed.files;
-          } catch {
-            skin = null;
-          }
-        }
-      }
-      const bundled = getDefaultSkin();
-      const selectedSkin = selectSkinForKeys(skin, archive.chart.keys);
-      const effectiveSkin = selectedSkin ?? selectSkinForKeys(bundled.skin, archive.chart.keys)
-        ?? selectSkinForKeys(archive.chart.skin?.data, archive.chart.keys);
-      const effectiveFiles = selectedSkin ? skinFiles : effectiveSkin?.source?.type === 'msp' ? bundled.files : null;
+      const selected = await resolveSelectedSkin(this.app.settings.skinId, archive.chart.keys, id => this.app.store.getSkinBytes(id));
+      if (!current()) return;
+      const effectiveSkin = selected.skin ?? selectSkinForKeys(archive.chart.skin?.data, archive.chart.keys);
+      const effectiveFiles = selected.files;
       const getAsset = (p: string) => (effectiveFiles ? findCI(effectiveFiles, p) : undefined) ?? findCI(archive.files, p);
       this.statusPct = 0.5;
 
@@ -196,11 +177,11 @@ export class PlayScreen extends Screen {
 
   private laneRect() {
     if (!this.renderer || !this.sess) return null;
-    const { ox, oy, scale, scaleY } = this.renderer.fieldOrigin(this.app.w, this.app.h);
+    const { ox, oy, scale, scaleY, top = 0, bottom = 480 } = this.renderer.fieldOrigin(this.app.w, this.app.h);
     const widths = this.renderer.laneWidths(this.sess);
     const totalW = widths.reduce((a, b) => a + b, 0);
     const x0 = this.sess.laneStart();
-    return { x: ox + x0 * scale, y: oy, w: totalW * scale, h: 480 * scaleY };
+    return { x: ox + x0 * scale, y: oy + top * scaleY, w: totalW * scale, h: (bottom - top) * scaleY };
   }
 
   private touchLane(x: number, y: number): number {
@@ -294,15 +275,14 @@ export class PlayScreen extends Screen {
 
     const dim = this.app.settings.bgDim, drawnPhase = s.phase;
 
-    // background image
-    if (s.bgImage && s.bgImage.complete && s.bgImage.naturalWidth > 0) {
+    // Skip fully darkened media; 0% brightness must be black, with no floor.
+    ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, w, h);
+    if (dim < 1 && s.bgImage && s.bgImage.complete && s.bgImage.naturalWidth > 0) {
       const iw = s.bgImage.naturalWidth;
       const ih = s.bgImage.naturalHeight;
       const sc = Math.max(w / iw, h / ih);
       ctx.drawImage(s.bgImage, (w - iw * sc) / 2, (h - ih * sc) / 2, iw * sc, ih * sc);
-      ctx.fillStyle = `rgba(5,7,15,${dim})`;
-      ctx.fillRect(0, 0, w, h);
-    } else {
+    } else if (dim < 1) {
       ctx.fillStyle = '#0d1218';
       ctx.fillRect(0, 0, w, h);
       const g = ctx.createRadialGradient(w / 2, h * 0.4, 10, w / 2, h * 0.4, w * 0.7);
@@ -314,15 +294,14 @@ export class PlayScreen extends Screen {
 
     // video background
     const v = s.videoEl;
-    if (v && s.videoReady && v.readyState >= 2) {
+    if (dim < 1 && v && s.videoReady && v.readyState >= 2) {
       const vw = v.videoWidth || 1280;
       const vh = v.videoHeight || 720;
       const sc = Math.max(w / vw, h / vh);
-      ctx.save();
-      ctx.globalAlpha = 1 - dim;
       ctx.drawImage(v, (w - vw * sc) / 2, (h - vh * sc) / 2, vw * sc, vh * sc);
-      ctx.restore();
-      ctx.fillStyle = `rgba(5,7,15,${dim * 0.6})`;
+    }
+    if (dim > 0 && dim < 1) {
+      ctx.fillStyle = `rgba(0,0,0,${dim})`;
       ctx.fillRect(0, 0, w, h);
     }
 
@@ -458,10 +437,11 @@ export class PlayScreen extends Screen {
     text(ctx, 'PAUSED', px + 28, py + 45, { size: 30, weight: 600 });
     text(ctx, 'Take a breath. Find the beat.', px + 30, py + 70, { size: 12, color: THEME.dim });
     const by = py + (short ? 98 : 116), half = (pw - 72) / 2;
-    const dim = this.app.ui.slider('pause-bgdim', px + 28, by + 24, half, 24, s.bgDim, 0, .9, .02);
+    const brightness = this.app.ui.slider('pause-bgdim', px + 28, by + 24, half, 24, 1 - s.bgDim, 0, 1, .01);
+    const dim = 1 - brightness;
     const speed = this.app.ui.slider('pause-speed', px + 44 + half, by + 24, half, 24, s.scrollSpeed, .4, 2, .05);
-    text(ctx, 'Background dim', px + 28, by + 10, { size: 12, color: THEME.dim });
-    text(ctx, Math.round(dim * 100) + '%', px + 28 + half, by + 10, { size: 12, align: 'right', color: THEME.accent });
+    text(ctx, 'Background brightness', px + 28, by + 10, { size: 12, color: THEME.dim });
+    text(ctx, Math.round(brightness * 100) + '%', px + 28 + half, by + 10, { size: 12, align: 'right', color: THEME.accent });
     text(ctx, 'Scroll speed', px + 44 + half, by + 10, { size: 12, color: THEME.dim });
     text(ctx, '×' + speed.toFixed(2), px + pw - 28, by + 10, { size: 12, align: 'right', color: THEME.accent });
     if (dim !== s.bgDim || speed !== s.scrollSpeed) { s.bgDim = dim; s.scrollSpeed = speed; this.app.saveSettings(); }

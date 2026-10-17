@@ -34,7 +34,7 @@ async function boot() {
     try { await installAndroidExamples(app.store); }
     catch { app.toast(tr('Example songs could not be installed. You can import your own songs.')); }
   }
-  if (app.centralLibrary || app.settings.serverUrl) {
+  if (!app.settings.serverDisconnected && (app.centralLibrary || app.settings.serverUrl)) {
     try {
       await app.pingServer();
     } catch {

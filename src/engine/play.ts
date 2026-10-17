@@ -30,6 +30,14 @@ interface Particle {
   x: number; y: number; vx: number; vy: number; life: number; ttl: number; color: string; size: number;
 }
 
+interface LaneLayout { x: number; y: number; hitY: number; w: number; scale: number; }
+
+// Bound cosmetic work during dense chords or a stalled frame catching up.
+// These limits never apply to judgments, hold ticks, score or sound.
+const MAX_HIT_PARTICLES = 512;
+const MAX_POPUP_POOL = 128;
+const PARTICLE_COLORS = ['#ffffff', '#7df9ff', '#ff4bd8', '#ffd166'];
+
 // Chart-time ticks: deterministic across FPS and speed mods (20 judgments/s).
 export const HOLD_TICK_MS = 50;
 
@@ -75,6 +83,14 @@ export class PlaySession {
 
   popups: Popup[] = [];
   particles: Particle[] = [];
+  private particlePool: Particle[] = [];
+  private popupPool: Popup[] = [];
+  private layoutSkin: NFSkin | null | undefined;
+  private layoutKeys = 0;
+  private layoutHit = NaN;
+  private laneWidthCache: number[] = [];
+  private laneLayoutCache: LaneLayout[] = [];
+  private laneStartCache = 0;
   colFlash: number[] = [];
   comboPulse = 0;
 
@@ -267,15 +283,23 @@ export class PlaySession {
       }
     }
 
-    this.particles = this.particles.filter((p) => {
-      const k = dtMs / 16;
+    const k = dtMs / 16;
+    let live = 0;
+    for (const p of this.particles) {
       p.x += p.vx * k;
       p.y += p.vy * k;
       p.vy += 0.15 * k;
       p.life += dtMs;
-      return p.life < p.ttl;
-    });
-    this.popups = this.popups.filter((p) => t - p.t0 < 900);
+      if (p.life < p.ttl) this.particles[live++] = p;
+      else if (this.particlePool.length < MAX_HIT_PARTICLES) this.particlePool.push(p);
+    }
+    this.particles.length = live;
+    live = 0;
+    for (const p of this.popups) {
+      if (t - p.t0 < 900) this.popups[live++] = p;
+      else if (this.popupPool.length < MAX_POPUP_POOL) this.popupPool.push(p);
+    }
+    this.popups.length = live;
     this.comboPulse = Math.max(0, this.comboPulse - dtMs / 300);
 
     if (this.hp <= 0 && !this.mods.noFail && !this.mods.auto && !this.finishPending) {
@@ -352,9 +376,11 @@ export class PlaySession {
       return;
     }
     if (this.holding[col] !== null) this.updateHold(col, t);
-    this.judgeNote(i, this.gradeOf(Math.abs(dt)));
+    const grade = this.gradeOf(Math.abs(dt));
+    this.judgeNote(i, grade);
     if (n.end) this.startHold(col, i, t);
-    this.flash(col);
+    // Perfect/great already flash in judgeNote (also used by autoplay).
+    if (grade !== 'perfect' && grade !== 'great') this.flash(col);
   }
 
   release(col: number, rawTimeMs: number) {
@@ -390,21 +416,33 @@ export class PlaySession {
   private spawnParticles(col: number) {
     if (!this.settings.particles) return;
     const l = this.layoutOf(col);
-    const colors = ['#ffffff', '#7df9ff', '#ff4bd8', '#ffd166'];
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 7 && this.particles.length < MAX_HIT_PARTICLES; i++) {
       const ang = -Math.PI / 2 + (Math.random() - 0.5) * 2.2;
       const sp = 2 + Math.random() * 4;
-      this.particles.push({
-        x: l.x,
-        y: l.hitY,
-        vx: Math.cos(ang) * sp,
-        vy: Math.sin(ang) * sp,
-        life: 0,
-        ttl: 260 + Math.random() * 240,
-        color: colors[(Math.random() * colors.length) | 0],
-        size: 2 + Math.random() * 3,
-      });
+      const p = this.particlePool.pop() ?? {} as Particle;
+      p.x = l.x; p.y = l.hitY;
+      p.vx = Math.cos(ang) * sp; p.vy = Math.sin(ang) * sp;
+      p.life = 0; p.ttl = 260 + Math.random() * 240;
+      p.color = PARTICLE_COLORS[(Math.random() * PARTICLE_COLORS.length) | 0];
+      p.size = 2 + Math.random() * 3;
+      this.particles.push(p);
     }
+  }
+
+  private addPopup(col: number, grade: JudgeGrade, w: (typeof JUDGE_WINDOWS)[number], tail = false) {
+    const l = this.layoutOf(col), p = this.popupPool.pop() ?? {} as Popup;
+    p.label = (tail ? 'TAIL ' : '') + w.label;
+    p.color = w.color; p.t0 = this.chartTime();
+    p.x = l.x; p.y = l.hitY;
+    p.big = grade === 'perfect' || grade === 'miss';
+    this.popups.push(p);
+  }
+
+  private clearEffects() {
+    for (const p of this.particles) if (this.particlePool.length < MAX_HIT_PARTICLES) this.particlePool.push(p);
+    for (const p of this.popups) if (this.popupPool.length < MAX_POPUP_POOL) this.popupPool.push(p);
+    this.particles.length = 0;
+    this.popups.length = 0;
   }
 
   // ---------- judgment ----------
@@ -439,15 +477,7 @@ export class PlaySession {
       this.changeHealth(grade);
       this.playHitSfx(n);
     }
-    const l = this.layoutOf(n.col);
-    this.popups.push({
-      label: w.label,
-      color: w.color,
-      t0: this.chartTime(),
-      x: l.x,
-      y: l.hitY,
-      big: grade === 'perfect' || grade === 'miss',
-    });
+    this.addPopup(n.col, grade, w);
     if (grade === 'perfect' || grade === 'great') this.flash(n.col);
     if (this.holding[n.col] === i) this.holding[n.col] = null;
   }
@@ -522,15 +552,7 @@ export class PlaySession {
       this.accSum += w.value;
       if (affectHealth) this.changeHealth(grade, true);
     }
-    const l = this.layoutOf(col);
-    this.popups.push({
-      label: 'TAIL ' + w.label,
-      color: w.color,
-      t0: this.chartTime(),
-      x: l.x,
-      y: l.hitY,
-      big: grade === 'perfect' || grade === 'miss',
-    });
+    this.addPopup(col, grade, w, true);
     if (grade !== 'miss') this.flash(col);
   }
 
@@ -570,34 +592,50 @@ export class PlaySession {
   }
 
   // ---------- layout (512x384 osu-style space) ----------
-  laneWidths(): number[] {
-    const skin = this.skin;
-    const w: number[] = [];
+  private ensureLaneLayout() {
+    const skin = this.skin, hit = this.hitY();
+    if (this.layoutSkin === skin && this.layoutKeys === this.keys && this.layoutHit === hit) return;
+    this.layoutSkin = skin; this.layoutKeys = this.keys; this.layoutHit = hit;
+    const widths = this.laneWidthCache;
+    widths.length = this.keys;
+    let total = 0;
     for (let i = 0; i < this.keys; i++) {
-      w.push(skin?.columns?.[i]?.width || skin?.columnWidth || 512 / this.keys);
+      widths[i] = skin?.columns?.[i]?.width || skin?.columnWidth || 512 / this.keys;
+      total += widths[i];
     }
-    return w;
+    let x = this.laneStartCache = (512 - total) / 2;
+    this.laneLayoutCache.length = this.keys;
+    for (let i = 0; i < this.keys; i++) {
+      this.laneLayoutCache[i] = { x: x + widths[i] / 2, y: hit, hitY: hit, w: widths[i], scale: 1 };
+      x += widths[i];
+    }
+  }
+
+  /** Session skin geometry is fixed during play; callers must not mutate it. */
+  laneWidths(): number[] {
+    this.ensureLaneLayout();
+    return this.laneWidthCache;
   }
 
   laneStart(): number {
     // OSK ColumnStart belongs to osu's screen layout, not our centered 512px field.
     // Preserve lane widths, but center the complete playfield on every platform.
-    return (512 - this.laneWidths().reduce((a, b) => a + b, 0)) / 2;
+    this.ensureLaneLayout();
+    return this.laneStartCache;
   }
 
   laneX(col: number): number {
-    const widths = this.laneWidths();
-    let x = this.laneStart();
-    for (let i = 0; i < col; i++) x += widths[i];
-    return x + widths[col] / 2;
+    this.ensureLaneLayout();
+    return this.laneLayoutCache[col].x;
   }
 
   hitY(): number {
     return this.skin?.hitPosition ?? 464;
   }
 
-  layoutOf(col: number): { x: number; y: number; hitY: number; w: number; scale: number } {
-    return { x: this.laneX(col), y: this.hitY(), hitY: this.hitY(), w: this.laneWidths()[col], scale: 1 };
+  layoutOf(col: number): LaneLayout {
+    this.ensureLaneLayout();
+    return this.laneLayoutCache[col];
   }
 
   // ---------- pause / seek ----------
@@ -619,8 +657,7 @@ export class PlaySession {
         this.holdResumeAt[col] = Math.max(this.holdResumeAt[col], pausedAt - this.settings.inputOffset);
       }
     }
-    this.popups = [];
-    this.particles = [];
+    this.clearEffects();
     this.colFlash.fill(0);
     this.audio.seekMusic((target + this.settings.audioOffset) / 1000);
     this.phase = 'playing';
@@ -654,8 +691,7 @@ export class PlaySession {
     this.counts = { perfect: 0, great: 0, good: 0, ok: 0, bad: 0, miss: 0, holdTicks: 0 };
     this.accSum = 0;
     this.accDen = 0;
-    this.popups = [];
-    this.particles = [];
+    this.clearEffects();
     this.finishPending = false;
     this.colFlash.fill(0);
     this.comboPulse = 0;

@@ -37,7 +37,7 @@ Copy-Item (Join-Path $root 'electron\bundled-assets.cjs') $appDir -Force
 @'
 {
   "name": "neonfall",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "main": "main.cjs"
 }
 '@ | Set-Content -Path (Join-Path $appDir 'package.json') -Encoding Ascii

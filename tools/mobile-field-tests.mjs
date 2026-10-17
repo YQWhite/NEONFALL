@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
 import { DEFAULT_SETTINGS, DEFAULT_MODS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX } from '../src/core/types.ts';
-import { getDefaultSkin } from '../src/core/default-skin.ts';
+import { getBuiltinSkin } from '../src/core/default-skin.ts';
 import { selectSkinForKeys } from '../src/core/osk.ts';
 import { PlayfieldRenderer } from '../src/engine/render.ts';
 import { PlaySession } from '../src/engine/play.ts';
@@ -22,7 +22,7 @@ globalThis.document = { documentElement: {}, hidden: false, createElement: tag =
 globalThis.localStorage = { data: new Map(), getItem(k) { return this.data.get(k) ?? null; }, setItem(k, v) { this.data.set(k, v); } };
 for (const font of ['C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/segoeui.ttf']) if (fs.existsSync(font)) GlobalFonts.registerFromPath(font);
 setLanguage('en');
-const { skin, files } = getDefaultSkin(), images = new Map();
+const { skin, files } = getBuiltinSkin('builtin:malody'), images = new Map();
 for (const [path, data] of files) if (/\.png$/i.test(path)) images.set(path, await loadImage(data));
 let assertions = 0;
 function check(value, message) { assertions++; assert.ok(value, message); }

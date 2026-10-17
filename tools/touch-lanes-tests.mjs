@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { InputManager } from '../src/engine/input.ts';
 import { PlayfieldRenderer } from '../src/engine/render.ts';
 import { laneAtPoint } from '../src/engine/lane-geometry.ts';
-import { getDefaultSkin } from '../src/core/default-skin.ts';
+import { getBuiltinSkin } from '../src/core/default-skin.ts';
 import { selectSkinForKeys } from '../src/core/osk.ts';
 import { DEFAULT_SETTINGS, DEFAULT_MODS } from '../src/core/types.ts';
 
 for (const [w, h] of [[780, 360], [360, 780], [1280, 720]]) for (const keys of [4, 5, 6]) {
-  const skin = selectSkinForKeys(getDefaultSkin().skin, keys);
+  const skin = selectSkinForKeys(getBuiltinSkin('builtin:malody').skin, keys);
   const renderer = new PlayfieldRenderer(skin, () => undefined, DEFAULT_SETTINGS, DEFAULT_MODS);
   const origin = renderer.fieldOrigin(w, h), widths = skin.columns.map(c => c.width), start = (512 - widths.reduce((a, b) => a + b, 0)) / 2;
   const input = new InputManager(keys, DEFAULT_SETTINGS);

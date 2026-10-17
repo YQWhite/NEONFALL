@@ -150,7 +150,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost'), p = decodeURIComponent(url.pathname), method = req.method;
     const u = authenticate(req), admin = isAdmin(req); const ok = (data, status = 200) => json(res, status, data);
-    if (p === '/api/ping' && method === 'GET') return ok({ ok: true, name: 'neonfall-server', version: '0.2.7', ratingVersion: 3, charts: listCharts().length, users: Object.keys(users).length, uploadPolicy: UPLOADS ? 'authenticated' : 'disabled', emailVerification: !!(mailConfig().enabled && mailConfig().host), avatars: true });
+    if (p === '/api/ping' && method === 'GET') return ok({ ok: true, name: 'neonfall-server', version: '0.2.8', ratingVersion: 3, charts: listCharts().length, users: Object.keys(users).length, uploadPolicy: UPLOADS ? 'authenticated' : 'disabled', emailVerification: !!(mailConfig().enabled && mailConfig().host), avatars: true });
     if (p === '/api/register' && method === 'POST') {
       if (rateLimit(req, 'register', 10, 3600000)) throw httpError(429, 'too many registration attempts; try later'); const b = await readJson(req);
       if (!b || typeof b.username !== 'string' || !/^[A-Za-z0-9_]{3,16}$/.test(b.username)) throw httpError(400, 'username: 3-16 letters, digits or underscores');

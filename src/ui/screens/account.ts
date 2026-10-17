@@ -26,6 +26,7 @@ export class AccountScreen extends Screen {
   private scroll = 0;
   private maxScroll = 0;
   private active = false;
+  private operation = 0;
   private avatarInput: HTMLInputElement | null = null;
   private avatarCrop: AbortController | null = null;
   private drag: { x: number; y: number; scroll: number; moved: boolean } | null = null;
@@ -55,6 +56,7 @@ export class AccountScreen extends Screen {
   }
 
   enter() {
+    ++this.operation;
     this.active = true;
     this.drag = null; this.suppressTap = false;
     for (const f of [this.username, this.nickname, this.password, this.email, this.serverUrl, this.verifyCode]) if (!f.el.isConnected) document.body.appendChild(f.el);
@@ -67,6 +69,7 @@ export class AccountScreen extends Screen {
   }
 
   leave() {
+    ++this.operation;
     this.active = false;
     this.drag = null;
     this.avatarCrop?.abort(); this.avatarCrop = null;
@@ -106,25 +109,32 @@ export class AccountScreen extends Screen {
   }
 
   async loadLeaderboard() {
+    const api = this.app.server;
+    const current = () => this.active && this.app.server === api && !this.app.settings.serverDisconnected;
     try {
       if (this.app.serverOnline) {
-        this.leaderboard = await this.app.server.leaderboard();
+        const rows = await api.leaderboard();
+        if (current() && this.app.serverOnline) this.leaderboard = rows;
       } else this.leaderboard = [];
     } catch {
-      this.leaderboard = [];
+      if (current()) this.leaderboard = [];
     }
   }
 
   async loadMyPlays() {
+    const api = this.app.server, username = this.app.account.user?.username, token = this.app.store.getToken();
+    const current = () => this.active && this.app.server === api && this.app.store.getToken() === token
+      && this.app.account.user?.username === username && !this.app.settings.serverDisconnected;
     try {
       if (this.app.account.server && this.app.serverOnline) {
-        this.myPlays = await this.app.server.myScores();
+        const rows = await api.myScores();
+        if (current()) this.myPlays = rows;
       } else {
         const best = this.app.store.getBestScores();
         this.myPlays = Object.values(best).sort((a, b) => b.playedAt - a.playedAt).slice(0, 20);
       }
     } catch {
-      this.myPlays = [];
+      if (current()) this.myPlays = [];
     }
   }
 
@@ -138,15 +148,24 @@ export class AccountScreen extends Screen {
     if (this.app.animateViewChange) this.app.animateViewChange(change); else change();
   }
 
+  private operationCurrent(operation: number, api: ServerApi) {
+    return this.active && this.operation === operation && this.app.server === api;
+  }
+
   async doLogin() {
-    if (this.busy) return;
+    if (!this.active || this.busy || this.app.settings.serverDisconnected) return;
+    const operation = ++this.operation, api = this.app.server, token = this.app.store.getToken();
     this.busy = 'signing in…';
     this.error = '';
     try {
       const u = this.username.value.trim();
       const p = this.password.value;
       if (!/^[A-Za-z0-9_]{3,16}$/.test(u)) throw new Error('username: 3-16 chars, letters/digits/underscore only');
-      const res = await this.app.server.login(u, p);
+      // Authentication mutates its API client's token. Keep that mutation local
+      // until this screen operation is still current, even after leave/reenter.
+      const res = await new ServerApi(api.base).login(u, p);
+      if (!this.operationCurrent(operation, api) || this.app.store.getToken() !== token || this.app.settings.serverDisconnected) return;
+      api.setToken(res.token);
       this.app.store.setToken(res.token);
       this.app.settings.lastUsername = u;
       this.app.saveSettings();
@@ -154,15 +173,16 @@ export class AccountScreen extends Screen {
       this.password.value = '';
       this.app.toast(tr('welcome back, {name}', { name: res.user.nickname || res.user.username }));
       await this.loadLeaderboard();
+      if (!this.operationCurrent(operation, api)) return;
       await this.loadMyPlays();
     } catch (e: any) {
-      this.error = e?.message || 'login failed';
-    }
-    this.busy = '';
+      if (this.operationCurrent(operation, api)) this.error = e?.message || 'login failed';
+    } finally { if (this.operation === operation) this.busy = ''; }
   }
 
   async doRegister() {
-    if (this.busy) return;
+    if (!this.active || this.busy || this.app.settings.serverDisconnected) return;
+    const operation = ++this.operation, api = this.app.server, token = this.app.store.getToken();
     this.busy = 'creating account…';
     this.error = '';
     try {
@@ -174,7 +194,9 @@ export class AccountScreen extends Screen {
       if (!n) throw new Error('nickname required');
       if (p.length < 8) throw new Error('password: at least 8 characters');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) throw new Error('invalid email address');
-      const res = await this.app.server.register(u, n, p, em);
+      const res = await new ServerApi(api.base).register(u, n, p, em);
+      if (!this.operationCurrent(operation, api) || this.app.store.getToken() !== token || this.app.settings.serverDisconnected) return;
+      api.setToken(res.token);
       this.app.store.setToken(res.token);
       this.app.settings.lastUsername = u;
       this.app.saveSettings();
@@ -182,11 +204,11 @@ export class AccountScreen extends Screen {
       this.password.value = '';
       this.app.toast(tr('account created — welcome to NEONFALL, {name}', { name: n }));
       await this.loadLeaderboard();
+      if (!this.operationCurrent(operation, api)) return;
       await this.loadMyPlays();
     } catch (e: any) {
-      this.error = e?.message || 'registration failed';
-    }
-    this.busy = '';
+      if (this.operationCurrent(operation, api)) this.error = e?.message || 'registration failed';
+    } finally { if (this.operation === operation) this.busy = ''; }
   }
 
   async doLocalRegister() {
@@ -208,6 +230,7 @@ export class AccountScreen extends Screen {
   }
 
   async doLogout() {
+    ++this.operation;
     this.avatarCrop?.abort(); this.avatarCrop = null; this.busy = '';
     void this.app.server.logout().catch(() => {});
     this.app.store.setToken('');
@@ -218,57 +241,93 @@ export class AccountScreen extends Screen {
   }
 
   async tryVerify() {
-    if (this.busy) return;
+    if (!this.active || this.busy) return;
+    const operation = ++this.operation, api = this.app.server, token = this.app.store.getToken();
+    const current = () => this.operationCurrent(operation, api) && this.app.store.getToken() === token && !this.app.settings.serverDisconnected;
     this.busy = 'Sending verification email…';
     try {
-      const r = await this.app.server.requestVerification();
-      this.app.toast(r.note || 'verification email requested');
+      const r = await api.requestVerification();
+      if (current()) this.app.toast(r.note || 'verification email requested');
     } catch (e: any) {
-      this.app.toast(tr('verify: {error}', { error: tr(e?.message || 'failed') }));
-    } finally { this.busy = ''; }
+      if (current()) this.app.toast(tr('verify: {error}', { error: tr(e?.message || 'failed') }));
+    } finally { if (this.operation === operation) this.busy = ''; }
   }
 
   async confirmVerify() {
-    if (this.busy) return;
+    if (!this.active || this.busy) return;
+    const operation = ++this.operation, api = this.app.server, token = this.app.store.getToken();
+    const current = () => this.operationCurrent(operation, api) && this.app.store.getToken() === token && !this.app.settings.serverDisconnected;
     this.busy = 'Verifying email…';
     try {
       const code = this.verifyCode.value.trim();
       if (!/^\d{6}$/.test(code)) throw new Error('Enter the six-digit verification code.');
-      await this.app.server.verifyEmail(code);
+      await api.verifyEmail(code);
+      if (!current()) return;
       await this.app.refreshAccount();
+      if (!current()) return;
       scoreSync(this.app).restoreCachedAccount();
       void scoreSync(this.app).sync();
       this.verifyCode.value = '';
       this.app.toast('Email verified.');
-    } catch (e: any) { this.app.toast(tr('verify: {error}', { error: tr(e?.message || 'failed') })); }
-    finally { this.busy = ''; }
+    } catch (e: any) { if (current()) this.app.toast(tr('verify: {error}', { error: tr(e?.message || 'failed') })); }
+    finally { if (this.operation === operation) this.busy = ''; }
   }
 
   async connectServer() {
-    if (this.busy) return;
+    if (!this.active || this.busy) return;
+    const operation = ++this.operation, token = this.app.store.getToken();
+    let api = this.app.server;
     this.busy = 'connecting…';
     this.error = '';
     try {
       const candidate = new ServerApi(this.serverUrl.value.trim(), this.app.store);
       const ok = await candidate.ping();
+      if (!this.operationCurrent(operation, api) || this.app.store.getToken() !== token) return;
       const url = candidate.base || location.origin;
       if (!ok) throw new Error(tr('no NEONFALL server at {url}', { url }));
       // Commit only after the candidate responds; failed connections preserve the current server and account.
       if (candidate.base !== this.app.server.base) this.app.store.setToken('');
       this.app.server = candidate;
+      api = candidate;
       this.app.settings.serverUrl = candidate.base;
+      this.app.settings.serverDisconnected = false;
       this.serverUrl.value = candidate.base;
       this.app.saveSettings();
       this.app.serverOnline = true;
+      this.app.menuMusic?.connectionChanged?.();
       await this.app.refreshAccount();
+      if (!this.operationCurrent(operation, api) || this.app.settings.serverDisconnected) return;
       scoreSync(this.app).restoreCachedAccount();
       void scoreSync(this.app).sync();
       await Promise.all([this.loadLeaderboard(), this.loadMyPlays()]);
-      this.app.toast(tr('connected to {url}', { url }));
+      if (this.operationCurrent(operation, api)) this.app.toast(tr('connected to {url}', { url }));
     } catch (e: any) {
-      this.error = e?.message || 'connection failed';
-    }
-    this.busy = '';
+      if (this.operationCurrent(operation, api)) this.error = e?.message || 'connection failed';
+    } finally { if (this.operation === operation) this.busy = ''; }
+  }
+
+  disconnectServer() {
+    if (this.busy) return;
+    ++this.operation;
+    const old = this.app.server;
+    this.avatarCrop?.abort(); this.avatarCrop = null;
+    this.avatarInput?.remove(); this.avatarInput = null;
+    this.app.settings.serverDisconnected = true;
+    // Replace the connection object so late account/sync responses cannot
+    // restore the disconnected session. Pending scores retain their owner.
+    void old.logout().catch(() => {});
+    old.setToken(''); old.online = false;
+    this.app.store.setToken('');
+    this.app.server = new ServerApi(old.base, this.app.store);
+    this.app.serverOnline = false;
+    this.app.menuMusic?.connectionChanged?.();
+    this.app.account = { server: false, user: this.app.store.getProfile() };
+    this.password.value = ''; this.verifyCode.value = '';
+    this.leaderboard = []; this.myPlays = [];
+    this.error = ''; this.mode = 'login';
+    this.app.saveSettings();
+    void this.loadMyPlays();
+    this.app.toast('Server disconnected. You can edit the address and reconnect.');
   }
 
   private fieldRow(
@@ -362,10 +421,13 @@ export class AccountScreen extends Screen {
       y += formH + 18;
     }
     {
-      fillPanel(ctx, px, y, pw, 174, { r: 18 }); text(ctx, 'CONNECT A SERVER', formX, y + 32, { size: 13, color: THEME.accent });
+      const connected = !this.app.settings.serverDisconnected && (this.app.serverOnline || acc.server);
+      fillPanel(ctx, px, y, pw, 174, { r: 18 }); text(ctx, connected ? 'CONNECTED' : 'CONNECT A SERVER', formX, y + 32, { size: 13, color: THEME.accent });
       const narrow = formW < 400;
-      this.fieldRow(ctx, formX, y + 70, narrow ? formW : formW - 130, 'server url (http://host:port)', this.serverUrl, this.app.serverOnline);
-      if (ui.button('connect', narrow ? formX : formX + formW - 116, narrow ? y + 122 : y + 70, narrow ? formW : 116, narrow ? 32 : 42, this.app.serverOnline ? 'CONNECTED' : 'CONNECT', { accent: !this.app.serverOnline, disabled: !!this.busy || this.app.serverOnline })) void this.connectServer();
+      this.fieldRow(ctx, formX, y + 70, narrow ? formW : formW - 130, 'server url (http://host:port)', this.serverUrl, connected || !!this.busy);
+      if (ui.button('connect', narrow ? formX : formX + formW - 116, narrow ? y + 122 : y + 70, narrow ? formW : 116, narrow ? 32 : 42, connected ? 'DISCONNECT' : 'CONNECT', { accent: !connected, disabled: !!this.busy })) {
+        if (connected) this.disconnectServer(); else void this.connectServer();
+      }
       if (!narrow && (this.error || this.busy)) text(ctx, this.error || this.busy, formX, y + 144, { size: 11, color: this.error ? THEME.red : THEME.dim, maxWidth: formW });
       y += 192;
     }

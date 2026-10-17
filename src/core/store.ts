@@ -1,6 +1,6 @@
 // Store: settings, chart/skin library (desktop fs bridge | IndexedDB), local profile & best scores.
 import type { Settings, PlayResult, UserInfo } from './types.ts';
-import { DEFAULT_SETTINGS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX } from './types.ts';
+import { DEFAULT_SETTINGS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, PLAYFIELD_BOTTOM_GAP_MAX } from './types.ts';
 import { sha1Hex, bytesToBase64, base64ToBytes, deepClone } from './zip.ts';
 import { readNFM, readNFSK, type NFMArchive } from './nfm.ts';
 import { idbPut, idbGet, idbDel, idbKeys, idbAll } from './idb.ts';
@@ -106,8 +106,11 @@ export class Store {
     const s = lsGet(LS_SETTINGS);
     if (s) this.settings = { ...deepClone(DEFAULT_SETTINGS), ...s };
     this.settings.language = s?.language === 'en' ? 'en' : 'zh-CN';
+    this.settings.serverDisconnected = s?.serverDisconnected === true;
     this.settings.playfieldScale = Number.isFinite(s?.playfieldScale) ? Math.max(PLAYFIELD_SCALE_MIN, Math.min(PLAYFIELD_SCALE_MAX, s.playfieldScale)) : 1.08;
+    this.settings.playfieldBottomGap = Number.isFinite(s?.playfieldBottomGap) ? Math.max(0, Math.min(PLAYFIELD_BOTTOM_GAP_MAX, s.playfieldBottomGap)) : undefined;
     this.settings.storyboardBrightness = Number.isFinite(s?.storyboardBrightness) ? Math.max(0, Math.min(1, s.storyboardBrightness)) : 1;
+    this.settings.bgDim = Number.isFinite(s?.bgDim) ? Math.max(0, Math.min(1, s.bgDim)) : DEFAULT_SETTINGS.bgDim;
     // fold device latency hint into audioOffset on first run
     if (typeof s?.audioOffsetAuto !== 'boolean') {
       this.settings.audioOffsetAuto = true;

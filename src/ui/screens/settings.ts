@@ -1,15 +1,14 @@
 import { Screen } from '../app.ts';
 import { THEME, text, fillPanel, paragraph, pageHeader, drawScrollbar } from '../theme.ts';
 import { tr } from '../i18n.ts';
-import { readNFSK } from '../../core/nfm.ts';
 import { findCI } from '../../core/zip.ts';
 import type { SkinEntry } from '../../core/store.ts';
-import { selectSkinForKeys } from '../../core/osk.ts';
 import { TapCalibration } from '../latency-calibration.ts';
 import { PlayfieldRenderer } from '../../engine/render.ts';
 import { PlaySession } from '../../engine/play.ts';
-import { DEFAULT_MODS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, type NFChart } from '../../core/types.ts';
-import { getDefaultSkin } from '../../core/default-skin.ts';
+import { DEFAULT_MODS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, PLAYFIELD_BOTTOM_GAP_MAX, type NFChart } from '../../core/types.ts';
+import { BUILTIN_SKINS } from '../../core/default-skin.ts';
+import { resolveSelectedSkin } from '../../core/skin-selection.ts';
 
 type Tab = 'general' | 'gameplay' | 'audio' | 'video' | 'input' | 'skin' | 'about';
 const TABS: Tab[] = ['general', 'gameplay', 'audio', 'video', 'input', 'skin', 'about'];
@@ -76,10 +75,9 @@ export class SettingsScreen extends Screen {
   private async loadPreview() {
     const token = ++this.previewToken;
     try {
-      const bytes = this.app.settings.skinId ? await this.app.store.getSkinBytes(this.app.settings.skinId) : null;
+      const { skin, files } = await resolveSelectedSkin(this.app.settings.skinId, this.keyMode, id => this.app.store.getSkinBytes(id));
       if (!this.active || token !== this.previewToken) return;
-      const parsed = bytes ? readNFSK(bytes) : getDefaultSkin(), skin = selectSkinForKeys(parsed.skin, this.keyMode);
-      const assets = (path: string) => parsed ? findCI(parsed.files, path) : undefined;
+      const assets = (path: string) => files ? findCI(files, path) : undefined;
       const chart: NFChart = { format: 'neonfall-chart', version: 1, keys: this.keyMode, od: 8, offset: 0,
         meta: { title: '', artist: '', creator: '', version: '', audio: '', audioLeadIn: 0, previewTime: 0, lengthMs: 10000 }, timing: [{ t: 0, bpm: 120 }], sv: [], breaks: [],
         notes: Array.from({ length: this.keyMode * 3 }, (_, i) => ({ col: i % this.keyMode, t: 1900 + Math.floor(i / this.keyMode) * 380 + i % this.keyMode * 70, ...(i === 2 ? { end: 2750 } : {}) })) };
@@ -125,6 +123,18 @@ export class SettingsScreen extends Screen {
       values.forEach((v, i) => { if (ui.chip(id + '-' + v, x + i * cw, y, cw - 8, 34, format(v), current === v).clicked) { set(v); this.app.uiSound(); } }); y += 58;
     };
     const percent = (v: number) => Math.round(v * 100) + '%';
+    const fieldPosition = (id: string) => {
+      let gap = s.playfieldBottomGap;
+      if (gap === undefined) {
+        const origin = this.preview?.renderer.fieldOrigin(w, h);
+        gap = origin && this.preview ? 1 - (origin.oy + this.preview.session.hitY() * origin.scaleY) / h : .14;
+      }
+      slider('Hit position from bottom', Math.max(0, Math.min(PLAYFIELD_BOTTOM_GAP_MAX, gap)), 0, PLAYFIELD_BOTTOM_GAP_MAX, .01,
+        v => s.playfieldBottomGap === undefined ? tr('Skin default · {value}', { value: percent(v) }) : percent(v), id, v => s.playfieldBottomGap = v);
+      if (ui.button(id + '-reset', x, y, Math.min(inner, 230), 34, 'RESET SKIN POSITION', { disabled: s.playfieldBottomGap === undefined })) s.playfieldBottomGap = undefined;
+      y += 50;
+      note('Moves the hit position; lanes extend to the top without changing note speed.');
+    };
     switch (this.tab) {
       case 'general':
         header('Appearance & language'); text(ctx, 'Language', x, y + 10, { size: 14 }); y += 28;
@@ -134,7 +144,8 @@ export class SettingsScreen extends Screen {
         y += 76; note('Switch languages instantly.'); header('Visual feedback'); toggle('Particles', s.particles, 'particles', v => s.particles = v); toggle('Touch lane hints', s.touchHint, 'touchHint', v => s.touchHint = v); break;
       case 'gameplay':
         header('Scroll & playfield'); slider('Scroll speed', s.scrollSpeed, .4, 2, .05, v => '×' + v.toFixed(2), 'scroll', v => s.scrollSpeed = v);
-        slider('Playfield scale', s.playfieldScale, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, .01, percent, 'scale', v => s.playfieldScale = v); note('Adjust from 50% to 200%. Tilted lanes stay within the screen, with a fixed hit line.');
+        slider('Playfield scale', s.playfieldScale, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, .01, percent, 'scale', v => s.playfieldScale = v); note('Adjust from 50% to 200%. Tilted lanes stay within the screen.');
+        fieldPosition('field-bottom-gap');
         header('Judgment'); note('Good hits restore health. Breaks let you recover.'); note('PERFECT ±16 ms · GREAT ±40 ms · GOOD ±73 ms · OK ±103 ms · BAD ±127 ms (OD 8)'); break;
       case 'audio': {
         header('Volumes'); slider('Music', s.musicVolume, 0, 1, .02, percent, 'music', v => s.musicVolume = v); slider('Hit sounds', s.sfxVolume, 0, 1, .02, percent, 'sfx', v => s.sfxVolume = v); slider('Preview', s.previewVolume, 0, 1, .02, percent, 'preview', v => s.previewVolume = v);
@@ -158,7 +169,7 @@ export class SettingsScreen extends Screen {
       case 'video':
         header('Background'); toggle('Storyboard', s.sbEnabled, 'sb', v => s.sbEnabled = v); choices('Storyboard quality', [.5, .75, 1], s.sbQuality, 'sbq', v => v === 1 ? 'HIGH' : v === .75 ? 'MED' : 'LOW', v => s.sbQuality = v);
         slider('Storyboard brightness', s.storyboardBrightness, 0, 1, .02, percent, 'sb-brightness', v => s.storyboardBrightness = v);
-        toggle('Video background', s.videoBg, 'video', v => s.videoBg = v); slider('Background dim', s.bgDim, 0, .9, .02, percent, 'bgdim', v => s.bgDim = v);
+        toggle('Video background', s.videoBg, 'video', v => s.videoBg = v); slider('Background brightness', 1 - s.bgDim, 0, 1, .01, percent, 'bgdim', v => s.bgDim = 1 - v);
         header('Performance'); choices('Resolution scale', [.5, .75, 1, 1.5, 2], s.resScale, 'rs', v => v + '×', v => { s.resScale = v; this.app.resize(); }); choices('FPS cap', [0, 60, 120, 240], s.fpsCap, 'fps', v => v ? String(v) : 'UNCAPPED', v => s.fpsCap = v); break;
       case 'input': {
         header('Key bindings'); note('Choose a mode, then click a key to rebind it.'); choices('KEYS', [4, 5, 6, 7, 8], this.keyMode, 'kb', v => v + 'K', v => { this.keyMode = v; this.captureBind = null; });
@@ -173,10 +184,12 @@ export class SettingsScreen extends Screen {
         choices('KEYS', [4, 5, 6, 7, 8], this.keyMode, 'preview-keys', v => v + 'K', v => { this.keyMode = v; void this.loadPreview(); });
         if (s.skinId && this.preview && !this.preview.session.skin) note('No matching layout; this key mode uses the default skin.');
         slider('Playfield scale', s.playfieldScale, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, .01, percent, 'skin-scale', v => s.playfieldScale = v);
-        for (const sk of [{ id: '', name: tr('DEFAULT SKIN') + ' · RM White Blue Bar 4–6K' }, ...this.skins]) {
-          const selected = s.skinId === sk.id;
-          if (ui.chip('skin-' + (sk.id || 'default'), x, y, inner - (sk.id ? 70 : 0), 56, sk.name, selected).clicked) { s.skinId = sk.id; void this.loadPreview(); }
-          if (sk.id && ui.button('skin-del-' + sk.id, x + inner - 62, y + 12, 54, 32, 'DELETE', { small: true, danger: true })) {
+        fieldPosition('skin-bottom-gap');
+        for (const sk of [...BUILTIN_SKINS, ...this.skins]) {
+          const builtin = !sk.id || sk.id.startsWith('builtin:');
+          const selected = s.skinId === sk.id || (!sk.id && s.skinId === 'builtin:osu');
+          if (ui.chip('skin-' + (sk.id || 'default'), x, y, inner - (builtin ? 0 : 70), 56, sk.name, selected).clicked) { s.skinId = sk.id; void this.loadPreview(); }
+          if (!builtin && ui.button('skin-del-' + sk.id, x + inner - 62, y + 12, 54, 32, 'DELETE', { small: true, danger: true })) {
             void (async () => { await this.app.store.deleteSkin(sk.id); if (s.skinId === sk.id) { s.skinId = ''; void this.loadPreview(); } this.app.saveSettings(); await this.loadSkins(); this.app.toast('skin deleted'); })();
           } y += 68;
         }

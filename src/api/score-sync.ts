@@ -86,6 +86,7 @@ export class ScoreSync {
   }
 
   restoreCachedAccount() {
+    if (this.app.settings.serverDisconnected) return;
     if (!this.app.store.getToken()) return;
     if (this.app.account.server && this.app.account.user) this.remember(this.app.account.user);
     else {
@@ -144,6 +145,7 @@ export class ScoreSync {
   }
 
   sync(): Promise<void> {
+    if (this.app.settings.serverDisconnected) return Promise.resolve();
     if (this.inFlight) return this.inFlight;
     // Periodic retries never compete with active gameplay for CPU/network resources.
     if (this.app.screen?.name === 'play') return Promise.resolve();
@@ -155,15 +157,16 @@ export class ScoreSync {
   }
 
   private async flush() {
+    if (this.app.settings.serverDisconnected) return;
     const api = this.app.server, server = this.serverKey, token = this.app.store.getToken();
     if (!this.app.centralLibrary && !this.app.settings.serverUrl && !token) return;
     if (!token) {
       const online = await api.ping();
-      if (this.app.server === api) this.app.serverOnline = online;
+      if (this.app.server === api && !this.app.settings.serverDisconnected) this.app.serverOnline = online;
       return;
     }
     api.setToken(token);
-    const sameConnection = () => this.app.server === api && this.serverKey === server && this.app.store.getToken() === token;
+    const sameConnection = () => !this.app.settings.serverDisconnected && this.app.server === api && this.serverKey === server && this.app.store.getToken() === token;
     try {
       const user = await api.me();
       if (!sameConnection()) return;

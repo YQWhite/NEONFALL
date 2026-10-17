@@ -133,6 +133,11 @@ export const DEFAULT_MODS: Mods = {
 export interface Settings {
   language: 'zh-CN' | 'en';
   playfieldScale: number;
+  /** Hit position's distance from the screen bottom, as a height fraction.
+   * Omitted preserves the skin's original anchor without changing note speed. */
+  playfieldBottomGap?: number;
+  /** Explicit disconnect persists until the player connects again. */
+  serverDisconnected?: boolean;
   scrollSpeed: number; audioOffset: number; visualOffset: number; inputOffset: number;
   musicVolume: number; sfxVolume: number; previewVolume: number; fpsCap: number; resScale: number;
   sbEnabled: boolean; sbQuality: number; storyboardBrightness: number; videoBg: boolean; bgDim: number; particles: boolean; touchHint: boolean;
@@ -140,6 +145,7 @@ export interface Settings {
 }
 export const PLAYFIELD_SCALE_MIN = .5;
 export const PLAYFIELD_SCALE_MAX = 2;
+export const PLAYFIELD_BOTTOM_GAP_MAX = .4;
 export const DEFAULT_SETTINGS: Settings = {
   language: 'zh-CN',
   playfieldScale: 1.08,

@@ -65,7 +65,7 @@ export class App {
   serverOnline = false;
   toastMsg = '';
   toastT0 = 0;
-  version = '0.2.7';
+  version = '0.2.8';
   time = 0;
   testMode = false;
   platform: 'web' | 'desktop' | 'android' = 'web';
@@ -108,6 +108,7 @@ export class App {
   }
 
   get centralLibrary(): boolean {
+    if (this.settings.serverDisconnected) return false;
     return !!this.settings.serverUrl || (this.platform === 'web' && typeof location !== 'undefined' && /^https?:$/.test(location.protocol));
   }
 
@@ -423,24 +424,35 @@ export class App {
   }
 
   async pingServer(): Promise<boolean> {
-    this.serverOnline = await this.server.ping();
+    if (this.settings.serverDisconnected) return false;
+    const api = this.server, online = await api.ping();
+    if (this.server !== api || this.settings.serverDisconnected) return false;
+    this.serverOnline = online;
     return this.serverOnline;
   }
 
   /** load account from server token (web mode) */
   async refreshAccount(): Promise<void> {
+    if (this.settings.serverDisconnected) {
+      this.account = { server: false, user: this.store.getProfile() };
+      return;
+    }
+    const api = this.server;
     const token = this.store.getToken();
     if (!token) {
       this.server.setToken('');
       this.account = { server: false, user: this.store.getProfile() };
       return;
     }
-    this.server.setToken(token);
+    api.setToken(token);
+    const current = () => this.server === api && this.store.getToken() === token && !this.settings.serverDisconnected;
     try {
-      const user = await this.server.me();
+      const user = await api.me();
+      if (!current()) return;
       this.account = { server: true, user };
       scoreSync(this).remember(user);
     } catch (error) {
+      if (!current()) return;
       // A temporary outage must not destroy a valid saved session.
       if (error instanceof ApiError && error.status === 401) {
         this.store.setToken('');

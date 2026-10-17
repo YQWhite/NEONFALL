@@ -156,6 +156,18 @@ export class MenuMusic {
     return listPlaybackCharts(this.app);
   }
 
+  /** Keep audible audio while invalidating downloads tied to the old server. */
+  connectionChanged() {
+    ++this.generation;
+    this.loading = false; this.starting = null;
+    this.app.audio.cancelPreviewLoad?.();
+    // The decoded song remains playable; keep its metadata and transport
+    // controls without retaining an old-server entry as a new download target.
+    this.entry = this.playingEntry && !this.playingEntry.server ? this.playingEntry : null;
+    this.error = '';
+    void this.ensureStarted();
+  }
+
   async select(entry: ChartEntry, fromStart = false): Promise<void> {
     if (!this.enabled) return;
     if (this.entry?.id === entry.id && !!this.entry.server === !!entry.server && (this.loading || this.app.audio.previewActive || this.app.audio.isPreviewPaused)) return;
@@ -273,7 +285,7 @@ export class MenuMusic {
     const entries = await this.list().catch(() => []);
     if (!this.enabled || token !== this.generation || (automatic && this.loopPolicy !== 'playlist')) return;
     const songs = groupSongs(entries);
-    const current = songs.findIndex(song => song.key === songKey(this.entry));
+    const current = songs.findIndex(song => song.key === songKey(this.entry ?? this.playingEntry));
     if (songs.length > 1 || (songs.length && current < 0)) await this.select(songs[(current + 1) % songs.length].charts[0], true);
     // A library containing one recording keeps playing instead of restarting it.
   }
@@ -385,12 +397,13 @@ export class MenuMusic {
     if (menu) this.drawProfile(ctx, x, y, margin);
     fillPanel(ctx, x, y, w, 88, { r: 16, fill: 'rgba(20,30,36,0.97)', line: 'rgba(174,199,218,0.16)' });
     const audio = app.audio;
+    const displayedEntry = this.entry ?? this.playingEntry;
     const blocked = audio.previewActive && audio.ctx?.state === 'suspended';
     text(ctx, this.loading ? 'LOADING AUDIO' : blocked ? 'Tap play to enable audio' : 'NOW PLAYING', x + 16, y + 17, { size: 9, spacing: '1.5px', color: '#87a4b5', weight: 700 });
     ctx.save(); ctx.beginPath(); ctx.rect(x + 16, y + 22, w - 110, 20); ctx.clip();
-    text(ctx, this.entry?.title || 'No songs yet. Import a chart.', x + 16, y + 37, { size: 13, color: '#e9f0f4', weight: 600 });
+    text(ctx, displayedEntry?.title || 'No songs yet. Import a chart.', x + 16, y + 37, { size: 13, color: '#e9f0f4', weight: 600 });
     ctx.restore();
-    if (app.ui.button('music-toggle', x + w - 88, y + 13, 32, 30, audio.previewActive && !blocked ? 'Ⅱ' : '▶', { small: true, disabled: !this.entry || this.loading })) {
+    if (app.ui.button('music-toggle', x + w - 88, y + 13, 32, 30, audio.previewActive && !blocked ? 'Ⅱ' : '▶', { small: true, disabled: (!this.entry && !audio.previewActive && !audio.isPreviewPaused) || this.loading })) {
       if (blocked) audio.resume();
       else if (audio.previewActive) audio.pausePreview();
       else if (audio.isPreviewPaused) audio.resumePreview();
@@ -403,7 +416,7 @@ export class MenuMusic {
     if (duration && app.ui.hover('music-seek', x + 16, y + 48, trackW, 18) && app.ui.p.down) audio.seekPreview((app.ui.p.x - x - 16) / trackW * duration);
     text(ctx, `${fmtTime(position * 1000)} / ${fmtTime(duration * 1000)}`, x + w - 16, y + 59, { size: 9, align: 'right', color: '#9aaebf' });
     ctx.save(); ctx.beginPath(); ctx.rect(x + 16, y + 65, w - 32, 17); ctx.clip();
-    text(ctx, this.error || (this.entry ? this.entry.artist : 'LIBRARY RADIO'), x + 16, y + 77, { size: 9, color: this.error ? '#f0a6a6' : '#738a9a' });
+    text(ctx, this.error || (displayedEntry ? displayedEntry.artist : 'LIBRARY RADIO'), x + 16, y + 77, { size: 9, color: this.error ? '#f0a6a6' : '#738a9a' });
     ctx.restore();
   }
 

@@ -12,7 +12,7 @@ import { PlayfieldRenderer } from '../src/engine/render.ts';
 import { InputManager } from '../src/engine/input.ts';
 import { laneAtPoint } from '../src/engine/lane-geometry.ts';
 import { mspArtPaths, mspCatPoses } from '../src/engine/msp-art.ts';
-import { getDefaultSkin } from '../src/core/default-skin.ts';
+import { getBuiltinSkin } from '../src/core/default-skin.ts';
 
 const root = new URL('../', import.meta.url), output = new URL('test-results/msp/', root);
 fs.mkdirSync(output, { recursive: true });
@@ -53,9 +53,9 @@ for (const keys of [4, 5, 6]) {
 assert.equal(skin.columns[3].keyPressedFlip, true, 'Right receptor artwork retains horizontal reflection');
 assert.equal(skin.hud.healthFill, '1749529118158.png');
 assert.equal(skin.judgments.miss, 'judgemiss-1.png');
-const bundled = getDefaultSkin();
-assert.equal(getDefaultSkin(), bundled, 'The default skin is decoded only once');
-assert.deepEqual(bundled.skin, skin, 'The embedded default matches the current MSP importer');
+const bundled = getBuiltinSkin('builtin:malody');
+assert.equal(getBuiltinSkin('builtin:malody'), bundled, 'The built-in Malody skin is decoded only once');
+assert.deepEqual(bundled.skin, skin, 'The embedded Malody example matches the current MSP importer');
 const wrapped = new Map([...original].map(([path, data]) => ['Wrapped/' + path, data]));
 assert.equal(parseMSP(wrapped).skin.name, skin.name);
 const broken = new Map(original); broken.set('info.asm', new Uint8Array([26, 255]));

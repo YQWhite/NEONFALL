@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('neonfallBridge', {
   isDesktop: true,
-  version: '0.2.7',
+  version: '0.2.8',
   appPath: '',
   listCharts: () => ipcRenderer.invoke('nf-list-charts'),
   readChart: (id) => ipcRenderer.invoke('nf-read-chart', id),

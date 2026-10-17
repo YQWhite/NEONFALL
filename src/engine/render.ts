@@ -6,6 +6,7 @@ import type { PlaySession } from './play.ts';
 import { tr } from '../ui/i18n.ts';
 import { mspArtPaths, mspCatPoses } from './msp-art.ts';
 import { skinBounds } from '../ui/skin-art.ts';
+import type { FieldOrigin } from './lane-geometry.ts';
 
 export class SkinImages {
   private images = new Map<string, HTMLImageElement>();
@@ -70,6 +71,7 @@ export class PlayfieldRenderer {
   private endTree = new Float64Array(0);
   private treeSize = 0;
   private oldHolds: number[] = [];
+  private fieldTop = 0;
   private fieldBottom = 960;
   private rasterScaleY = 1;
   private rasterOffsetY = 0;
@@ -107,17 +109,21 @@ export class PlayfieldRenderer {
     return Math.min((w * 0.94) / 512, (h * 0.9) / 480 * zoom);
   }
 
-  fieldOrigin(w: number, h: number): { ox: number; oy: number; scale: number; scaleY: number } {
+  fieldOrigin(w: number, h: number): FieldOrigin {
     const scale = this.fieldScale(w, h);
+    const gap = this.settings.playfieldBottomGap;
+    const override = Number.isFinite(gap) ? h * (1 - clamp(gap!, 0, .4)) : undefined;
     if (this.skin?.perspective) {
       const hit = this.skin.hitPosition ?? 414;
       const scaleY = h * .86 / hit;
-      return { ox: (w - 512 * scale) / 2, oy: 0, scale, scaleY };
+      const oy = (override ?? h * .86) - hit * scaleY;
+      return { ox: (w - 512 * scale) / 2, oy, scale, scaleY, top: -oy / scaleY, bottom: (h - oy) / scaleY };
     }
     const base = Math.min(w * .94 / 512, h * .9 / 480);
     const hit = this.skin?.hitPosition ?? 464;
-    const anchor = (h - 480 * base) / 2 + hit * base;
-    return { ox: (w - 512 * scale) / 2, oy: anchor - hit * scale, scale, scaleY: scale };
+    const anchor = override ?? (h - 480 * base) / 2 + hit * base;
+    const oy = anchor - hit * scale;
+    return { ox: (w - 512 * scale) / 2, oy, scale, scaleY: scale, top: -oy / scale, bottom: (h - oy) / scale };
   }
 
   laneWidths(sess: PlaySession): number[] {
@@ -136,8 +142,9 @@ export class PlayfieldRenderer {
 
   // ================== main draw ==================
   draw(ctx: CanvasRenderingContext2D, sess: PlaySession, w: number, h: number, nowPerf: number) {
-    const { ox, oy, scale, scaleY } = this.fieldOrigin(w, h);
-    this.fieldBottom = Math.max(960, (h - oy) / scaleY);
+    const { ox, oy, scale, scaleY, top, bottom } = this.fieldOrigin(w, h);
+    this.fieldTop = Math.min(0, top!);
+    this.fieldBottom = Math.max(480, bottom!);
     ctx.save();
     ctx.translate(ox, oy);
     ctx.scale(scale, scaleY);
@@ -163,15 +170,15 @@ export class PlayfieldRenderer {
     // whose stage/columns are intentionally transparent over the song background.
     if (!this.skin) {
       ctx.fillStyle = '#10151e';
-      ctx.fillRect(x0, 0, totalW, 480);
+      ctx.fillRect(x0, this.fieldTop, totalW, 480 - this.fieldTop);
     }
 
     // Draw only within this frame's transform; async callbacks must never paint.
     const stage = this.skin?.stage;
     const left = this.images.get(stage?.left), right = this.images.get(stage?.right);
     const bottom = this.images.get(stage?.bottom);
-    if (left) ctx.drawImage(left, x0 - 90, 0, 90, 480);
-    if (right) ctx.drawImage(right, x0 + totalW, 0, 90, 480);
+    if (left) this.drawExtendedRail(ctx, left, x0 - 90, 90);
+    if (right) this.drawExtendedRail(ctx, right, x0 + totalW, 90);
     if (bottom) ctx.drawImage(bottom, x0 - 90, hitY, totalW + 180, 480 - hitY);
 
     // column zones
@@ -181,13 +188,13 @@ export class PlayfieldRenderer {
       const background = this.skin?.columns?.[c]?.background;
       if (background) {
         ctx.fillStyle = `rgba(${background[0]},${background[1]},${background[2]},${background[3] / 255})`;
-        ctx.fillRect(cx, 0, colW, 480);
+        ctx.fillRect(cx, this.fieldTop, colW, 480 - this.fieldTop);
       }
       if (!this.skin) {
         ctx.strokeStyle = 'rgba(215,225,240,0.08)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(cx, 0);
+        ctx.moveTo(cx, this.fieldTop);
         ctx.lineTo(cx, 480);
         ctx.stroke();
       }
@@ -195,7 +202,7 @@ export class PlayfieldRenderer {
     }
     if (!this.skin) {
       ctx.beginPath();
-      ctx.moveTo(cx, 0);
+      ctx.moveTo(cx, this.fieldTop);
       ctx.lineTo(cx, 480);
       ctx.stroke();
     }
@@ -220,8 +227,17 @@ export class PlayfieldRenderer {
   projectX(x: number, y: number): number {
     const p = this.skin?.perspective;
     if (!p) return x;
-    const ratio = clamp(p.topWidth, .08, 1) + (1 - clamp(p.topWidth, .08, 1)) * clamp(y / (this.skin?.hitPosition ?? 414), 0, 1.35);
+    const top = clamp(p.topWidth, .08, 1);
+    const ratio = Math.max(.025, top + (1 - top) * Math.min(y / (this.skin?.hitPosition ?? 414), 1.35));
     return 256 + (x - 256) * ratio;
+  }
+
+  private projectSlope(x: number, y: number): number {
+    const p = this.skin?.perspective;
+    if (!p) return 0;
+    const top = clamp(p.topWidth, .08, 1), hit = this.skin?.hitPosition ?? 414;
+    if (y >= hit * 1.35 || top + (1 - top) * y / hit <= .025) return 0;
+    return (x - 256) * (1 - top) / hit;
   }
 
   /** Perspective depth accelerates notes towards the receptor. Both endpoints
@@ -234,9 +250,35 @@ export class PlayfieldRenderer {
     return hit - hit * q / (depth + (1 - depth) * q);
   }
 
+  /** Undo depth only for candidate bounds; note timing itself stays unchanged. */
+  private unprojectY(y: number): number {
+    const depth = this.skin?.msp?.depth;
+    if (depth === undefined || depth >= 1) return y;
+    const hit = this.skin?.hitPosition ?? 414;
+    if (y > hit) return hit + (y - hit) * depth;
+    const ratio = (hit - y) / hit;
+    const denominator = 1 - (1 - depth) * ratio;
+    return denominator > 0 ? hit - hit * depth * ratio / denominator : -Infinity;
+  }
+
+  /** Preserve authored stage art at its original size; extend its top edge when
+   * the hit line moves down instead of stretching the complete playfield. */
+  private drawExtendedRail(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, width: number, slope = 0) {
+    ctx.drawImage(image, x, 0, width, 480);
+    if (this.fieldTop < 0) {
+      ctx.save();
+      if (slope) ctx.transform(1, 0, slope, 1, 0, 0);
+      ctx.drawImage(image, 0, 0, image.width, 1, x, this.fieldTop, width, -this.fieldTop);
+      ctx.restore();
+    }
+  }
+
   private lanePolygon(ctx: CanvasRenderingContext2D, x: number, width: number, top: number, bottom: number) {
     ctx.beginPath(); ctx.moveTo(this.projectX(x, top), top); ctx.lineTo(this.projectX(x + width, top), top);
-    ctx.lineTo(this.projectX(x + width, bottom), bottom); ctx.lineTo(this.projectX(x, bottom), bottom); ctx.closePath();
+    if (top < 0 && bottom > 0) ctx.lineTo(this.projectX(x + width, 0), 0);
+    ctx.lineTo(this.projectX(x + width, bottom), bottom); ctx.lineTo(this.projectX(x, bottom), bottom);
+    if (top < 0 && bottom > 0) ctx.lineTo(this.projectX(x, 0), 0);
+    ctx.closePath();
   }
 
   private drawPerspectiveField(ctx: CanvasRenderingContext2D, sess: PlaySession, x0: number, widths: number[], hitY: number, nowPerf: number) {
@@ -246,7 +288,7 @@ export class PlayfieldRenderer {
     let x = x0;
     for (let col = 0; col < widths.length; col++) {
       const bg = this.skin?.columns[col]?.background ?? [14, 20, 28, 235];
-      this.lanePolygon(ctx, x, widths[col], 0, 480);
+      this.lanePolygon(ctx, x, widths[col], this.fieldTop, 480);
       ctx.fillStyle = `rgba(${bg[0]},${bg[1]},${bg[2]},${bg[3] / 255})`; ctx.fill();
       if (!art?.laneLine) { ctx.strokeStyle = 'rgba(155,209,235,.24)'; ctx.lineWidth = .8; ctx.stroke(); }
       const age = nowPerf - (sess.colFlash[col] || 0);
@@ -265,10 +307,13 @@ export class PlayfieldRenderer {
         }
       }
       const line = this.images.get(art?.laneLine?.image);
-      if (line && col > 0) this.perspectiveImage(ctx, line, x - 1.3, 0, 2.6, hitY);
+      if (line && col > 0) {
+        this.perspectiveImage(ctx, line, x - 1.3, 0, 2.6, hitY);
+        if (this.fieldTop < 0) this.perspectiveImage(ctx, line, x - 1.3, this.fieldTop, 2.6, -this.fieldTop, false, [0, 0, 1, 1 / line.height]);
+      }
       x += widths[col];
     }
-    ctx.save(); this.lanePolygon(ctx, x0, total, 0, 480); ctx.clip();
+    ctx.save(); this.lanePolygon(ctx, x0, total, this.fieldTop, 480); ctx.clip();
     this.drawPerspectiveReceptors(ctx, sess, x0, widths, hitY, nowPerf);
     this.drawNotes(ctx, sess, x0, widths, hitY, nowPerf);
     ctx.restore();
@@ -282,7 +327,7 @@ export class PlayfieldRenderer {
    * buffer, shader, or per-frame image allocations. Long bodies are bounded to
    * the visible field; tap notes need only a handful of strips. */
   private perspectiveImage(ctx: CanvasRenderingContext2D, img: HTMLImageElement, x: number, y: number, width: number, height: number, flip = false, crop?: number[], flipX = false) {
-    if (height <= 0 || y >= 480 || y + height <= 0) return;
+    if (height <= 0 || y >= 480 || y + height <= this.fieldTop) return;
     const paint = () => {
       if (flipX) { ctx.translate(2 * x + width, 0); ctx.scale(-1, 1); }
       if (crop) ctx.drawImage(img, crop[0] * img.width, crop[1] * img.height, crop[2] * img.width, crop[3] * img.height, x, y, width, height);
@@ -294,13 +339,12 @@ export class PlayfieldRenderer {
       // dividers need the same single transform, rather than 100 strips each.
       const mid = y + height / 2, center = x + width / 2;
       const ratio = (this.projectX(x + width, mid) - this.projectX(x, mid)) / width;
-      const slope = mid > 0 && mid < 480
-        ? (center - 256) * (1 - clamp(this.skin!.perspective!.topWidth, .12, 1)) / (this.skin?.hitPosition ?? 414) : 0;
+      const slope = this.projectSlope(center, mid);
       ctx.save(); ctx.transform(ratio, 0, slope, 1, 256 * (1 - ratio) - slope * mid, 0);
       if (flip) { ctx.translate(0, 2 * y + height); ctx.scale(1, -1); }
       paint(); ctx.restore(); return;
     }
-    const from = Math.max(0, y), end = Math.min(480, y + height);
+    const from = Math.max(this.fieldTop, y), end = Math.min(480, y + height);
     const strip = 4;
     for (let at = from; at < end;) {
       // Adjacent clips meet on device-pixel boundaries. Fractional clip edges
@@ -309,8 +353,7 @@ export class PlayfieldRenderer {
       const span = next - at;
       const mid = at + span / 2, center = x + width / 2;
       const ratio = (this.projectX(x + width, mid) - this.projectX(x, mid)) / width;
-      const slope = mid < 480
-        ? (center - 256) * (1 - clamp(this.skin!.perspective!.topWidth, .12, 1)) / (this.skin?.hitPosition ?? 414) : 0;
+      const slope = this.projectSlope(center, mid);
       // Clip a complete transformed image, rather than independently resampling
       // cropped source bands (which creates horizontal seams on Canvas backends).
       ctx.save(); ctx.beginPath(); ctx.rect(-2048, at, 4096, span); ctx.clip();
@@ -358,9 +401,9 @@ export class PlayfieldRenderer {
         ctx.globalAlpha *= .45 * Math.exp(-((beat % 1 + 1) % 1) * 5);
       }
       if (sprite?.additive) ctx.globalCompositeOperation = 'lighter';
-      ctx.drawImage(img, left, 0, width + 8, 480);
+      this.drawExtendedRail(ctx, img, left, width + 8, this.projectSlope(x0, this.fieldTop / 2));
       ctx.translate(512, 0); ctx.scale(-1, 1);
-      ctx.drawImage(img, left, 0, width + 8, 480);
+      this.drawExtendedRail(ctx, img, left, width + 8, this.projectSlope(x0, this.fieldTop / 2));
       ctx.restore();
     }
     void total; void hitY;
@@ -454,9 +497,6 @@ export class PlayfieldRenderer {
     const t = sess.drawTime();
     const scrollMap = sess.scrollMap ?? sess.timeMap;
     const svNow = scrollMap.svBeatAt(t);
-    // visible range in sv-beat space: FUTURE notes (svBeat > svNow) appear above the
-    // hitline, up to 18.7 beats ahead; allow a sliver just past the hitline.
-    const svTop = svNow + (480 + 260) / bh;
     // A tall skin sprite can extend back into the viewport from below it.
     // Include its full height instead of assuming all note images are 18px.
     let capHeight = 40;
@@ -467,6 +507,10 @@ export class PlayfieldRenderer {
         if (img) capHeight = Math.max(capHeight, widths[col] * img.height / Math.max(1, img.width));
       }
     }
+    // Increasing the visible track length reveals earlier notes at the same
+    // velocity. Depth projection needs its inverse for the new top boundary.
+    const visibleTop = this.unprojectY(this.fieldTop) - capHeight;
+    const svTop = svNow + Math.max(740, hitY - visibleTop) / bh;
     const svBottom = svNow - Math.max(0, this.fieldBottom + capHeight - hitY) / bh;
     const tLo = scrollMap.msAtSvBeat(svBottom);
     const tHi = scrollMap.msAtSvBeat(svTop) + 50;
@@ -599,11 +643,13 @@ export class PlayfieldRenderer {
       const depth = this.skin.msp?.depth ?? 1;
       const headH = head ? colW * head.height / Math.max(1, head.width) * (skinCol?.holdHeadScaleY ?? skinCol?.noteScaleY ?? 1) * depth : 18;
       const tailH = tail ? colW * tail.height / Math.max(1, tail.width) * (skinCol?.holdTailScaleY ?? skinCol?.noteScaleY ?? 1) * depth : 0;
-      const top = this.projectY(yTop - tailH / 2), bottom = this.projectY(held ? yHead : yHead - headH / 2);
+      // Consuming the head removes its artwork, not its body attachment point.
+      // Switching to yHead stretched spherical holds by half a cap on keydown.
+      const top = this.projectY(yTop - tailH / 2), bottom = this.projectY(yHead - (head ? headH / 2 : held ? 0 : headH / 2));
       if (yHead < yTop) return;
       if (body && bottom > top) this.perspectiveImage(ctx, body, cx - colW / 2, top, colW, bottom - top);
       else if (bottom > top) {
-        this.lanePolygon(ctx, cx - colW * .32, colW * .64, Math.max(0, top), Math.min(480, bottom));
+        this.lanePolygon(ctx, cx - colW * .32, colW * .64, Math.max(this.fieldTop, top), Math.min(480, bottom));
         ctx.fillStyle = this.columnTint(col); ctx.fill();
       }
       if (tail) this.perspectiveImage(ctx, tail, cx - colW / 2, this.projectY(yTop - tailH), colW, this.projectY(yTop) - this.projectY(yTop - tailH), skinCol?.tailFlip !== false);
@@ -620,8 +666,8 @@ export class PlayfieldRenderer {
     // below yTop. Extend the body half-way under each cap (osu DrawableHoldNote)
     // so rounded/transparent cap edges join without a seam or body protrusion.
     // Do not impose a minimum hold length: that moves the real tail timestamp.
-    const top = Math.max(-480, yTop - tailH / 2);
-    const bottom = Math.min(960, held ? yHead : yHead - headH / 2);
+    const top = Math.max(Math.min(-480, this.fieldTop), yTop - tailH / 2);
+    const bottom = Math.min(this.fieldBottom, yHead - (head ? headH / 2 : held ? 0 : headH / 2));
     if (yHead < yTop) return;
     if (body && bottom > top) {
       if (this.skin?.noteBodyStyle === 1) {
@@ -744,7 +790,7 @@ export class PlayfieldRenderer {
         const img = this.cached(light);
         if (img) {
           ctx.globalAlpha = (1 - flashAge / 180) * 0.9;
-          ctx.drawImage(img, cx - colW / 2, 0, colW, 480);
+          this.drawExtendedRail(ctx, img, cx - colW / 2, colW);
           ctx.globalAlpha = 1;
         }
       }
@@ -855,7 +901,7 @@ export class PlayfieldRenderer {
   private drawFlashlight(ctx: CanvasRenderingContext2D, sess: PlaySession, x0: number, widths: number[], hitY: number) {
     ctx.save();
     ctx.fillStyle = 'rgba(2,4,10,0.84)';
-    ctx.fillRect(0, 0, 512, 480);
+    ctx.fillRect(0, this.fieldTop, 512, this.fieldBottom - this.fieldTop);
     ctx.globalCompositeOperation = 'destination-out';
     for (let c = 0; c < sess.keys; c++) {
       const cx = this.laneCenter(x0, widths, c);

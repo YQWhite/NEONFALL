@@ -131,7 +131,7 @@ console.log('PASS preview-bus spectrum, mute/pause gating, BPM changes and audio
 globalThis.window = { addEventListener() {}, removeEventListener() {} };
 globalThis.document = { body: { appendChild() {} }, createElement() { return { value: '', style: {}, addEventListener() {}, blur() {}, remove() {} }; } };
 const { SelectScreen } = await import('../src/ui/screens/select.ts');
-const treeApp = { w: 800, h: 600, menuMusic: { entry: songs[0], ensureStarted: async () => {} }, uiSound() {} };
+const treeApp = { w: 800, h: 600, menuMusic: { entry: songs[0], ensureStarted: async () => {} }, ui: { p: {}, cancelPointer() {} }, uiSound() {} };
 const tree = new SelectScreen(treeApp); tree.entries = songs; tree.applyFilter();
 assert.deepEqual(tree.view.map(c => c.id), ['easy', 'medium', 'hard', 'other']);
 assert.equal(tree.entry().id, 'hard', 'initial selection follows the current recording difficulty');
@@ -300,3 +300,66 @@ await new Promise(resolve => setTimeout(resolve, 0));
 assert.equal(orderMusic.entry.id, 'order-a', 'late automatic playlist fetch cannot advance the selected song');
 orderMusic.setScreen('play');
 console.log('PASS ordered playlist wrap, selected-song repeat, inherited submenu policy and late auto-next cancellation');
+
+// Changing server invalidates pending fetch/decode/catalogue without silencing
+// the decoded recording or stranding its visible pause/resume controls.
+const { createCanvas } = await import('@napi-rs/canvas');
+const { listPlaybackCharts } = await import('../src/api/library.ts');
+const switchAudio = new AudioEngine(); switchAudio.ctx = ctx; switchAudio.master = gain();
+switchAudio.decode = async () => ({ duration: 90 });
+const switchApp = { settings: { previewVolume: .35 }, centralLibrary: false, serverOnline: false,
+  audio: switchAudio, screen: { name: 'account' }, w: 1000, h: 700,
+  store: { listCharts: async () => [], getChartBytes: async () => sampleBytes },
+  server: { downloadChart: async () => sampleBytes },
+};
+const switchMusic = new MenuMusic(switchApp);
+switchMusic.setScreen('menu'); await switchMusic.ensureStarted();
+const priorSong = entry('old-remote', 'Decoded old song', 1, { server: true });
+await switchMusic.select(priorSong, true);
+const priorSource = switchAudio.previewSrc;
+let resolveOldDownload;
+switchApp.server.downloadChart = () => new Promise(resolve => { resolveOldDownload = resolve; });
+const oldDownload = switchMusic.select(entry('late-remote', 'Pending old song', 2, { server: true }));
+switchMusic.connectionChanged();
+assert.equal(switchAudio.previewSrc, priorSource, 'disconnect retains already decoded audio');
+assert.equal(switchMusic.entry, null, 'old remote entry cannot be reused as a download target');
+assert.equal(switchMusic.playingEntry, priorSong, 'decoded recording keeps title and transport metadata');
+resolveOldDownload(sampleBytes); await oldDownload;
+assert.equal(switchAudio.previewSrc, priorSource, 'old host download cannot replace retained recording');
+assert.equal(switchMusic.loading, false);
+let toggleOptions;
+switchApp.ui = { p: {}, hover: () => false, button(id, x, y, w, h, label, options) {
+  if (id !== 'music-toggle') return false;
+  toggleOptions = options; return !options.disabled;
+} };
+const switchCanvas = createCanvas(1000, 700).getContext('2d');
+switchMusic.draw(switchCanvas);
+assert.equal(toggleOptions.disabled, false, 'disconnect keeps the transport button enabled');
+assert.equal(switchAudio.isPreviewPaused, true, 'retained recording can pause');
+switchMusic.draw(switchCanvas);
+assert.equal(switchAudio.previewActive, true, 'retained recording can resume');
+const resumedSource = switchAudio.previewSrc;
+let resolveOldDecode;
+switchApp.server.downloadChart = async () => sampleBytes;
+switchAudio.decode = () => new Promise(resolve => { resolveOldDecode = resolve; });
+const switchedDecode = switchMusic.select(entry('decode-remote', 'Late decoded song', 3, { server: true }));
+await Promise.resolve(); await Promise.resolve();
+assert.equal(typeof resolveOldDecode, 'function');
+switchMusic.connectionChanged(); resolveOldDecode({ duration: 60 }); await switchedDecode;
+assert.equal(switchAudio.previewSrc, resumedSource, 'old host decode cannot replace retained recording');
+switchMusic.setScreen('play');
+
+const localEntry = entry('local-after-switch', 'Local download', 1);
+let resolveOldList;
+switchApp.store.listCharts = async () => [localEntry]; switchApp.centralLibrary = switchApp.serverOnline = true;
+switchApp.server = { listCharts: () => new Promise(resolve => { resolveOldList = resolve; }) };
+const oldList = listPlaybackCharts(switchApp); await Promise.resolve();
+switchApp.server = {}; resolveOldList([priorSong]);
+assert.deepEqual(await oldList, [localEntry], 'old server catalogue cannot enter replacement connection');
+let rejectOldList;
+switchApp.server = { listCharts: () => new Promise((_, reject) => { rejectOldList = reject; }) };
+const failingList = listPlaybackCharts(switchApp); await Promise.resolve();
+switchApp.server = {}; rejectOldList(new Error('old host offline'));
+assert.deepEqual(await failingList, [localEntry]);
+assert.equal(switchApp.serverOnline, true, 'old catalogue failure cannot mark new server offline');
+console.log('PASS server switch preserves audio/transport and rejects old download, decode and catalogue responses');

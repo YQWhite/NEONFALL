@@ -4,7 +4,7 @@ import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { PlaySession } from '../src/engine/play.ts';
 import { PlayfieldRenderer } from '../src/engine/render.ts';
 import { DEFAULT_MODS, DEFAULT_SETTINGS } from '../src/core/types.ts';
-import { readNFSK } from '../src/core/nfm.ts';
+import { BUILTIN_SKINS, getBuiltinSkin } from '../src/core/default-skin.ts';
 import { selectSkinForKeys } from '../src/core/osk.ts';
 
 const output = new URL('../test-results/hold-flicker/', import.meta.url);
@@ -22,9 +22,8 @@ const layouts = [
   { name: 'perspective', skin: { ...plain, perspective: { topWidth: .55 } }, images },
   { name: 'generated', skin: null, images: new Map() },
 ];
-const bundled = new URL('../../samples-converted/', import.meta.url);
-for (const name of fs.readdirSync(bundled).filter(name => /\.nfsk$/i.test(name))) {
-  const parsed = readNFSK(fs.readFileSync(new URL(name, bundled))), skin = selectSkinForKeys(parsed.skin, 4);
+for (const { id, name } of BUILTIN_SKINS) {
+  const parsed = getBuiltinSkin(id), skin = selectSkinForKeys(parsed.skin, 4);
   if (!skin) continue;
   const decoded = new Map();
   for (const col of skin.columns) for (const key of ['noteImg', 'noteImgH', 'noteImgT', 'bodyImg', 'bodyBegin', 'bodyEnd']) {
@@ -53,8 +52,8 @@ function make(skin, decoded, visualOffset = 0) {
   return { session, renderer, canvas, ctx, draw, frames, release(at) { now = at; down = false; session.release(0, at); } };
 }
 
-// Trace actual drawing: a consumed head is never redrawn, and body ends at the
-// hitline rather than at the centre of a head sprite which no longer exists.
+// Trace actual drawing: a consumed head is never redrawn; its body connection
+// stays at the authored cap centre instead of jumping down by half the cap.
 for (const perspective of [false, true]) {
   const state = make(perspective ? layouts[1].skin : plain, images);
   let headCalls = 0, bodyBottom = -Infinity;
@@ -72,7 +71,55 @@ for (const perspective of [false, true]) {
   });
   state.renderer.drawNotes(trace, state.session, 124, [66, 66, 66, 66], 402, 3000);
   assert.equal(headCalls, 0, `consumed head redrawn: perspective=${perspective}`);
-  assert.equal(bodyBottom, 402, 'held body must reach the judgement line');
+  assert.equal(bodyBottom, 402 - 28 / 2, 'holding must retain the same head/body attachment point');
+}
+
+// Use the actual spherical sample as well as generated fixtures. At the exact
+// hit time, pressing a hold may remove the cap but cannot lengthen its body.
+const attachments = [];
+// Compare the real spherical hold with its receptor ring at the exact head time.
+const osuExample = layouts.find(layout => /Remilia/.test(layout.skin?.name ?? ''));
+assert.ok(osuExample, 'the real OSU ring example must be covered');
+if (osuExample) {
+  const state = make(osuExample.skin, osuExample.images), frames = createCanvas(1560, 360), view = frames.getContext('2d');
+  const archive = getBuiltinSkin('');
+  for (const col of osuExample.skin.columns) for (const path of [col.keyImg, col.keyImgD]) {
+    if (path && archive.files.has(path)) state.renderer.images.images.set(path, await loadImage(archive.files.get(path)));
+  }
+  for (const [i, held] of [false, true].entries()) {
+    view.save(); view.translate(i * 780, 0); view.fillStyle = '#0d1218'; view.fillRect(0, 0, 780, 360);
+    state.session.isJudged = () => held; state.session.isHeld = () => held;
+    state.renderer.draw(view, state.session, 780, 360, 3000);
+    view.fillStyle = '#ffffff'; view.font = '16px sans-serif'; view.fillText(held ? 'Held: body stays at ring centre' : 'Head at hit time', 22, 28); view.restore();
+  }
+  fs.writeFileSync(new URL('osu-ring-attachment.png', output), frames.toBuffer('image/png'));
+}
+for (const layout of layouts.filter(layout => layout.skin)) {
+  const state = make(layout.skin, layout.images), width = state.session.laneWidths()[0];
+  const col = layout.skin.columns[0], head = layout.images.get(col.noteImgH ?? col.bodyBegin ?? col.noteImg);
+  const body = layout.images.get(col.bodyImg);
+  if (!body || !head) continue;
+  const bottoms = [];
+  const trace = new Proxy(state.ctx, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (key === 'drawImage') return (image, ...args) => {
+        if (image === body && args.length === 4) bottoms.push(args[1] + args[3]);
+        return value.call(target, image, ...args);
+      };
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+    set(target, key, value) { Reflect.set(target, key, value, target); return true; },
+  });
+  const hit = state.session.hitY(), center = state.session.laneX(0);
+  state.renderer.drawHold(trace, state.session, 0, center, width, hit - 220, hit, 0, false);
+  const before = bottoms.at(-1); bottoms.length = 0;
+  state.renderer.drawHold(trace, state.session, 0, center, width, hit - 220, hit, 0, true);
+  const after = bottoms.at(-1);
+  assert.ok(Number.isFinite(before) && Number.isFinite(after));
+  assert.equal(after, before, `${layout.name}: held body moved below the spherical target`);
+  assert.ok(after < hit, `${layout.name}: body must end above the hitline at the cap centre`);
+  attachments.push({ skin: layout.name, before, after, hit });
 }
 
 const results = [];
@@ -110,5 +157,5 @@ for (const visualOffset of [-80, 80]) {
 }
 
 fs.writeFileSync(new URL('tail-consumption.png', output), montage.toBuffer('image/png'));
-fs.writeFileSync(new URL('results.json', output), JSON.stringify({ results, limitation: 'Native Canvas and real PlaySession; no physical device or browser FPS measurement.' }, null, 2));
+fs.writeFileSync(new URL('results.json', output), JSON.stringify({ results, attachments, limitation: 'Native Canvas and real PlaySession; no physical device or browser FPS measurement.' }, null, 2));
 console.log(`PASS ${layouts.length} held-note layouts / no consumed-head redraw / monotonic tail fade / visual offsets / preserved 20Hz scoring and graded release / rewind`);
