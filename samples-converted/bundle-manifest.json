@@ -1,0 +1,51 @@
+{
+  "revision": "2026-10-17-kiai-0.2.2",
+  "files": [
+    {
+      "name": "----[Touhou project] .Remilia Scarlet. 2.0 ----.nfsk",
+      "sha256": "6ecffc309b59187bc8a048fb52dd1889c3b860af6ebdc257209f8c9913d2b8ff",
+      "replaces": [
+        "3ae36b5189c623e52e062d4b3f5ee2e0e3a168568a0d597dafa977c381e1e6e8",
+        "417f3b3d3f0ad4ea64f3a1ecd42d0e364edcab326d01f7ecf9bdceaf90878349",
+        "ed3b7b4845aa4a711bee74ddbcc9e9f388958d871bdfebaa57aa6b76818f9cba",
+        "22a72a3c4241540ff33c2a356e1bec1999e32b3818f07552ab6500f6675f6480"
+      ]
+    },
+    {
+      "name": "もぺもぺ [-_Suic!de.-.].nfm",
+      "sha256": "c7a6c258654927e80d8272ccbba643aa1169f39e41fc5a9e417cbd0b69a43758",
+      "replaces": [
+        "445376431ad7acda83e3b56e2ec6485874b2a23e8b0f1e13688dd409cb99bc1b",
+        "8cbcd3ad143521c7cd16140e3327329f46c0a4d5d24ced9ce91cea05f62026a8",
+        "91b9b18fdb0df0fad48430c31630a8667e5e89e69d1fd6a4abecc8788ac2efa9"
+      ]
+    },
+    {
+      "name": "もぺもぺ [-_cute.-.].nfm",
+      "sha256": "40669df73b4be6f3f8a06e65b6f76c25f7612724f5c03b8a881452f4cd564101",
+      "replaces": [
+        "20a0c7d12b486cb6423efcde79e8ae3e9ab8881c9d4755e91211bcc50b6fde44",
+        "50cd210cfc040daf6105369ca340e4ac01638157dc7fe7c0d79fec2516f14629",
+        "26ddcf9c29984e3be0808da1abc59d7269e4827c4d1bfde5df1404d04d5b97eb"
+      ]
+    },
+    {
+      "name": "もぺもぺ [-_evil.-.].nfm",
+      "sha256": "a3ca5fd14180f847d95af21c57a4c26cd69ffd65443668f19bac115efac46724",
+      "replaces": [
+        "f5fd0aef8c9707415a8271937fb6cec23dc303220fbd47e0a03b295d997e3eae",
+        "d05283dddded6e3ddcae4623b6a39bed353cd8cf5f5d4970a253f8cc7aff711a",
+        "e9e9944afec00bb8eb3644878475a3f59e3b1f61ad33f2c80ab111a7d8fc7988"
+      ]
+    },
+    {
+      "name": "M@GICAL☆CURE! LOVE ？ SHOT!  [4K - Hard Lv.19].nfm",
+      "sha256": "9195e90bb4bc758ef658a30e03f4eccee795e5bcc9811f70c14b2dfd1aca2ff2",
+      "replaces": [
+        "29915adb20b4d0748287bba9948b09f346ac8912bc23d89b5215379873d39467",
+        "90fad16788d922704ccbb842b6c28edfa04f589cba6675dfc3f42440a9c69db2",
+        "64f321df8289cb138663bd9f9d4696e5168bf75b9be08353e6b6ae342040caa6"
+      ]
+    }
+  ]
+}

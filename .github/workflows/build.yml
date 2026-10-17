@@ -1,0 +1,89 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;35.0.0'
+
+      # Build scripts read seed charts from ../samples-converted (parent of the repo).
+      - name: Stage seed charts to parent dir
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ..\samples-converted | Out-Null
+          Copy-Item -Path samples-converted\* -Destination ..\samples-converted\ -Recurse -Force
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web
+        run: npm run build
+
+      - name: Package web + server
+        run: npm run package:online
+
+      - name: Package Windows
+        shell: pwsh
+        run: |
+          $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          powershell -NoProfile -File tools\package-win.ps1 -OutputName "NEONFALL-$ver-win-x64"
+
+      - name: Build Android APK
+        shell: pwsh
+        run: powershell -NoProfile -File tools\build-android.ps1 -Online
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: neonfall-release
+          path: |
+            release/NEONFALL-win-x64.zip
+            release/NEONFALL.apk
+            release/NEONFALL-web.zip
+            release/NEONFALL-server.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$ver"
+          # Re-publishing the same version replaces the previous release + tag.
+          gh release delete $tag --yes 2>$null
+          git push origin --delete $tag 2>$null
+          gh release create $tag `
+            release/NEONFALL-win-x64.zip `
+            release/NEONFALL.apk `
+            release/NEONFALL-web.zip `
+            release/NEONFALL-server.zip `
+            --title "NEONFALL v$ver" `
+            --generate-notes `
+            --latest
