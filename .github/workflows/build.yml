@@ -45,6 +45,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Electron 44 no longer auto-downloads its binary via postinstall;
+      # install.js must be run explicitly.
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+
       - name: Build web
         run: npm run build
 
