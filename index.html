@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#05070f" />
+  <title>NEONFALL</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      overflow: hidden; background: #05070f; color: #dff3ff;
+      font-family: "Segoe UI", "Arial", "Noto Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-user-select: none; user-select: none; touch-action: none;
+    }
+    #stage { position: fixed; inset: 0; }
+    #stage > canvas { display: block; position: absolute; }
+    video { position: absolute; }
+    #boot {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at 50% 40%, #20332b 0%, #0d1218 70%);
+      z-index: 99;
+    }
+    #boot .logo {
+      font-size: 44px; letter-spacing: 0.35em; font-weight: 800;
+      color: #c9ded4;
+      animation: npulse 1.6s ease-in-out infinite;
+    }
+    @keyframes npulse { 0%,100% { opacity: .75; } 50% { opacity: 1; } }
+    #loadbar { position: absolute; bottom: 22vh; width: 320px; height: 3px; background: #16233f; border-radius: 2px; overflow: hidden; }
+    #loadbar i { display: block; height: 100%; width: 45%; background: #a6bdb2; animation: loading 1.5s ease-in-out infinite; }
+    @keyframes loading { from { transform: translateX(-110%); } to { transform: translateX(330%); } }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="boot"><div class="logo">NEONFALL</div><div id="loadbar"><i></i></div></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

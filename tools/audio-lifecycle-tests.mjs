@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import { AudioEngine } from '../src/engine/audio.ts';
+
+const audio = new AudioEngine(), pending = new Map();
+audio.decode = (_bytes, key) => new Promise(resolve => pending.set(key, resolve));
+const stale = new AbortController();
+const oldLoad = audio.loadMusic(new Uint8Array(), 'old', stale.signal);
+stale.abort();
+const newLoad = audio.loadMusic(new Uint8Array(), 'new');
+pending.get('new')({ duration: 180 }); await newLoad;
+pending.get('old')({ duration: 60 }); await oldLoad;
+assert.equal(audio.musicDurationMs, 180000, 'leaving old play load cannot overwrite new music');
+const cancelled = new AbortController(); cancelled.abort();
+await audio.loadMusic(new Uint8Array(), 'cancelled', cancelled.signal);
+assert.equal(pending.has('cancelled'), false, 'already aborted decode is never scheduled');
+const a = audio.loadMusic(new Uint8Array(), 'a'), b = audio.loadMusic(new Uint8Array(), 'b');
+pending.get('b')({ duration: 90 }); await b; pending.get('a')({ duration: 30 }); await a;
+assert.equal(audio.musicDurationMs, 90000, 'newest load wins even without an external cancellation signal');
+
+const gain = { value: .4, cancelScheduledValues() {}, setValueAtTime(v) { this.value = v; }, linearRampToValueAtTime(v) { this.value = v; } };
+audio.ctx = { currentTime: 10 }; audio.previewGain = { gain }; audio.previewSrc = {};
+audio.previewBuffer = { duration: 100 }; audio.previewOffset = 30; audio.previewStartCtx = 10;
+audio.setPreviewVolume(.4); const source = audio.previewSrc;
+audio.setPreviewDucking(.08); assert.equal(gain.value, .032);
+audio.ctx.currentTime += 4; assert.equal(audio.previewTimeSec, 34);
+audio.setPreviewVolume(.8); assert.equal(gain.value, .064, 'volume changes respect calibration attenuation');
+audio.setPreviewDucking(1); assert.equal(gain.value, .8);
+assert.equal(audio.previewSrc, source, 'calibration does not stop or replace preview source');
+audio.previewPaused = true; audio.previewSrc = null;
+audio.setPreviewDucking(.08); audio.setPreviewDucking(1);
+assert.equal(audio.isPreviewPaused, true, 'restoring volume preserves an explicit user pause');
+console.log('PASS cancellable music loading, superseded decode, and calibration ducking without clock/pause changes');

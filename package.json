@@ -1,0 +1,44 @@
+{
+  "name": "neonfall",
+  "version": "0.2.7",
+  "private": true,
+  "description": "NEONFALL — a cross-platform falling-note rhythm game (4K/5K/6K/7K). One codebase: Web + Windows + Android.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "node --experimental-transform-types tools/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:storyboard:canvas": "node --experimental-transform-types tools/storyboard-canvas-test.mjs",
+    "test:menu:browser": "node tools/menu-rhythm-browser.cjs",
+    "test:avatar:browser": "node tools/avatar-crop-browser.cjs",
+    "test:mobile:menus": "node --experimental-transform-types tools/mobile-menu-layout-tests.mjs",
+    "convert": "node tools/convert-cli.mjs",
+    "test": "node tools/unit-tests.mjs && node tools/skin-tests.mjs && node --experimental-transform-types tools/compat-tests.mjs && node --experimental-transform-types tools/menu-audio-tests.mjs && node --experimental-transform-types tools/calibration-tests.mjs && node --experimental-transform-types tools/storyboard-tests.mjs && node --experimental-transform-types tools/storyboard-repair-tests.mjs && node tools/bundled-chart-bridge-tests.cjs && node --experimental-transform-types tools/session-storyboard-tests.mjs && node --experimental-transform-types tools/hold-tests.mjs && node --experimental-transform-types tools/storyboard-canvas-test.mjs && node --experimental-transform-types tools/gameplay-refresh-tests.mjs && node tools/bundled-refresh-tests.cjs && node --experimental-transform-types tools/ui-refresh-canvas.mjs && npm run test:performance && npm run test:online && npm run test:refresh",
+    "test:performance": "node --experimental-transform-types tools/skin-performance-tests.mjs",
+    "test:online": "node tools/server-tests.cjs && node tools/smtp-tests.cjs && node --experimental-transform-types tools/online-client-tests.mjs && node --experimental-transform-types tools/client-server-integration-tests.mjs && node --experimental-transform-types tools/online-integration-tests.mjs && node --experimental-transform-types tools/score-sync-tests.mjs && node --experimental-transform-types tools/transport-avatar-tests.mjs",
+    "server": "node server/server.js",
+    "electron:dev": "electron .",
+    "electron:pack": "electron-builder --dir --win",
+    "android:sync": "npm run build && cap sync android",
+    "android:build": "powershell -NoProfile -File tools/build-android.ps1",
+    "android:package": "powershell -NoProfile -File tools/build-android.ps1",
+    "package:online": "node tools/package-online.mjs",
+    "refresh:bundled": "node --experimental-transform-types tools/refresh-bundled.mjs",
+    "test:ui": "node --experimental-transform-types tools/ui-refresh-canvas.mjs",
+    "test:refresh": "node --experimental-transform-types tools/msp-tests.mjs && node --experimental-transform-types tools/touch-lanes-tests.mjs && node --experimental-transform-types tools/storyboard-brightness-tests.mjs && node --experimental-transform-types tools/display-mode-tests.mjs && node --experimental-transform-types tools/android-bundled-tests.mjs && node --experimental-transform-types tools/menu-library-canvas.mjs && node --experimental-transform-types tools/hold-flicker-tests.mjs && node --experimental-transform-types tools/menu-polish-tests.mjs && node --experimental-transform-types tools/avatar-ui-tests.mjs && node --experimental-transform-types tools/preparation-outro-tests.mjs && node --experimental-transform-types tools/screen-transition-tests.mjs && node --experimental-transform-types tools/audio-lifecycle-tests.mjs && node --experimental-transform-types tools/mobile-field-tests.mjs && node --experimental-transform-types tools/constant-speed-render-tests.mjs && node --experimental-transform-types tools/constant-speed-rating-tests.mjs && node --experimental-transform-types tools/menu-effects-tests.mjs && node --experimental-transform-types tools/kiai-import-tests.mjs && node --experimental-transform-types tools/kiai-audio-tests.mjs && node --experimental-transform-types tools/menu-fountain-tests.mjs"
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.1.2",
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@napi-rs/canvas": "^1.0.11",
+    "electron": "^44.8.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.8.3",
+    "vite": "^8.3.4"
+  }
+}

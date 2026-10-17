@@ -1,0 +1,11 @@
+{
+  "appId": "com.neonfall.game",
+  "appName": "NEONFALL",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

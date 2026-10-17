@@ -1,0 +1,40 @@
+# ---- Dependencies ----
+node_modules/
+
+# ---- Build output ----
+dist/
+release/
+.gradle-home/
+
+# ---- Android: build output & machine-local config ----
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/
+android/local.properties
+*.apk
+*.aab
+
+# ---- Runtime data & logs ----
+server/data/
+local-server/
+*.log
+*.pid
+
+# ---- Test artifacts & reports ----
+test-results/
+
+# ---- Handoff / delivery / deployment docs (not source) ----
+HANDOFF.md
+docs/
+server/DEPLOYMENT.zh-CN.md
+
+# ---- Secrets & signing keys ----
+*.keystore
+*.jks
+*.pem
+.env
+.env.*
+
+# ---- Stray accidental file (misnamed PNG) ----
+/System.Drawing.Drawing2D.GraphicsPath

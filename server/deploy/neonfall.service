@@ -1,0 +1,21 @@
+[Unit]
+Description=NEONFALL web and chart repository
+After=network.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/www/wwwroot/neonfall
+# Replace this path with the result of: command -v node
+ExecStart=/usr/bin/node /www/wwwroot/neonfall/server/server.js
+EnvironmentFile=/www/wwwroot/neonfall/server/neonfall.env
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

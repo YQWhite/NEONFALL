@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { installAndroidExamples } from '../src/core/android-bundled.ts';
+
+const storage = new Map();
+globalThis.localStorage = { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) };
+const content = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])];
+const entries = content.map((data, i) => ({ name: `${i}.nfm`, file: `${i}.nfm`, sha1: createHash('sha1').update(data).digest('hex') }));
+let failSecond = true, downloads = 0;
+globalThis.fetch = async url => {
+  if (url.endsWith('manifest.json')) return { ok: true, json: async () => entries };
+  downloads++;
+  const index = url.endsWith('0.nfm') ? 0 : 1;
+  if (index === 1 && failSecond) throw new Error('interrupted');
+  return { ok: true, arrayBuffer: async () => content[index].buffer };
+};
+const library = [];
+const store = { listCharts: async () => library, putChart: async data => { library.push({ id: createHash('sha1').update(data).digest('hex') }); } };
+await assert.rejects(installAndroidExamples(store), /interrupted/);
+assert.equal(library.length, 1);
+failSecond = false;
+await installAndroidExamples(store);
+assert.equal(library.length, 2, 'partial installation resumes without duplicating charts');
+assert.equal(downloads, 3);
+await installAndroidExamples(store);
+assert.equal(downloads, 3, 'completed installation is not repeated');
+storage.clear();
+await installAndroidExamples(store);
+assert.equal(downloads, 3, 'existing user library is preserved');
+console.log('PASS Android bundled examples: interruption recovery, idempotency, preserving user libraries');
