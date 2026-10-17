@@ -65,6 +65,12 @@ jobs:
       - name: Build Android APK
         shell: pwsh
         run: |
+          # The aliyun maven mirrors (first in android/build.gradle for local China
+          # builds) return 502 from GitHub Actions. Gradle auto-loads
+          # $GRADLE_USER_HOME/init.gradle, and build-apk.bat points that at
+          # .gradle-home, so inject the official repos ahead of the mirrors.
+          New-Item -ItemType Directory -Force -Path .gradle-home | Out-Null
+          "allprojects { repositories { google(); mavenCentral() } }" | Set-Content -Path .gradle-home\init.gradle -Encoding utf8
           & .\tools\build-android.ps1 -Online
 
       - name: Upload artifacts
