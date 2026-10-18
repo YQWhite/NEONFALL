@@ -27,7 +27,7 @@ export class TapCalibration {
   private sources: AudioBufferSourceNode[] = [];
   private gain: GainNode | null = null;
   private generation = 0;
-  constructor(private ctx: AudioContext) {}
+  constructor(private ctx: AudioContext, private output?: AudioNode) {}
   get now() { return this.ctx.currentTime; }
   get progress() { return this.beats.length ? Math.max(0, Math.min(24, Math.floor((this.now - this.beats[0]) / CALIBRATION.interval) + 1)) : 0; }
   async start(volume: number) {
@@ -40,7 +40,7 @@ export class TapCalibration {
       if (generation !== this.generation) return;
       if (this.ctx.state !== 'running') throw new Error('Audio is unavailable. Enable audio and retry.');
       const gain = this.ctx.createGain(); this.gain = gain;
-      gain.gain.value = Math.max(0.15, Math.min(0.7, volume)); gain.connect(this.ctx.destination);
+      gain.gain.value = Math.max(0, Math.min(1, volume)); gain.connect(this.output ?? this.ctx.destination);
       const buffer = this.ctx.createBuffer(1, Math.ceil(this.ctx.sampleRate * 0.045), this.ctx.sampleRate);
       const data = buffer.getChannelData(0);
       for (let i = 0; i < data.length; i++) { const t = i / this.ctx.sampleRate; data[i] = Math.sin(2 * Math.PI * 1000 * t) * Math.exp(-t / 0.008) * Math.min(1, t / 0.001); }

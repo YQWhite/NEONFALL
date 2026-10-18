@@ -12,6 +12,13 @@ interface ChartCache {
   deleteChart(id: string): Promise<unknown>;
 }
 
+interface ChartDownload {
+  bytes: Uint8Array;
+  // Only the current disk lookup is authoritative. A later memory hit must
+  // check again because the player can delete an offline download at any time.
+  locallyCached?: boolean;
+}
+
 export interface ServerAnnouncement { title: string; body: string; updatedAt?: string; }
 export type LeaderboardMetric = 'rating' | 'bestPp' | 'totalScore' | 'accuracy' | 'clears';
 export interface GlobalLeaderboardEntry {
@@ -38,7 +45,8 @@ export class ServerApi {
   base: string;
   private token: string;
   online = false;
-  private downloads = new Map<string, Promise<Uint8Array>>();
+  private downloads = new Map<string, Promise<ChartDownload>>();
+  private chartWrites = new Map<string, Promise<void>>();
   private chartBytes = new Map<string, Uint8Array>();
   private chartNames = new Map<string, string>();
   private cacheSize = 0;
@@ -149,26 +157,53 @@ export class ServerApi {
     });
   }
 
-  async downloadChart(id: string): Promise<Uint8Array> {
+  async downloadChart(id: string, options: { persist?: boolean } = {}): Promise<Uint8Array> {
+    const download = await this.loadChartBytes(id);
+    // Covers and menu previews need only the bounded memory cache. Explicit
+    // downloads and gameplay retain the existing offline persistence behavior,
+    // including when their bytes were first fetched by a preview.
+    if (options.persist !== false && this.cache && download.locallyCached !== true) {
+      await this.persistChart(id, download);
+    }
+    return download.bytes;
+  }
+
+  private async loadChartBytes(id: string): Promise<ChartDownload> {
     const existing = this.downloads.get(id);
     if (existing) return existing;
     const bytes = this.chartBytes.get(id);
-    if (bytes) { this.chartBytes.delete(id); this.chartBytes.set(id, bytes); return bytes; }
+    if (bytes) { this.chartBytes.delete(id); this.chartBytes.set(id, bytes); return { bytes }; }
     const pending = (async () => {
       const cached = await this.cache?.getChartBytes(id).catch(() => null);
       const data = cached ?? await this.request(this.downloadPath(id), {}, async res => new Uint8Array(await res.arrayBuffer()), Math.max(this.timeoutMs, 120000));
-      if (!cached && this.cache) await this.cache.putChart(data, this.chartNames.get(id) || id + '.nfm').catch(() => {});
       if (data.byteLength <= 64 * 1024 * 1024) {
-        while (this.cacheSize + data.byteLength > 64 * 1024 * 1024 && this.chartBytes.size) {
+        while ((this.cacheSize + data.byteLength > 64 * 1024 * 1024 || this.chartBytes.size >= 24) && this.chartBytes.size) {
           const oldest = this.chartBytes.keys().next().value!;
           this.cacheSize -= this.chartBytes.get(oldest)!.byteLength; this.chartBytes.delete(oldest);
         }
         this.chartBytes.set(id, data); this.cacheSize += data.byteLength;
       }
-      return data;
+      return { bytes: data, locallyCached: !!cached };
     })();
     this.downloads.set(id, pending);
     try { return await pending; } finally { this.downloads.delete(id); }
+  }
+
+  private async persistChart(id: string, download: ChartDownload): Promise<void> {
+    const existing = this.chartWrites.get(id);
+    if (existing) return existing;
+    const pending = (async () => {
+      // Recheck before a write: another caller may already have persisted the
+      // shared transfer, or the player may have deleted a former disk copy.
+      // No permanent "downloaded" flag can become stale after local deletion.
+      const cached = await this.cache!.getChartBytes(id).catch(() => null);
+      if (!cached) await this.cache!.putChart(download.bytes, this.chartNames.get(id) || id + '.nfm');
+    })().catch(() => {
+      // Local quota/filesystem failures must not prevent playback. The pending
+      // entry is removed below, so the next explicit request retries the write.
+    });
+    this.chartWrites.set(id, pending);
+    try { await pending; } finally { this.chartWrites.delete(id); }
   }
 
   async uploadChart(bytes: Uint8Array, name: string): Promise<ChartEntry> {
@@ -275,8 +310,8 @@ export class ServerApi {
     return Array.isArray(rows) ? rows.filter(row => scoreVersion === 2 ? row?.scoreVersion === 2 : row?.scoreVersion !== 2) : [];
   }
 
-  async myScores(): Promise<PlayResult[]> {
-    return (await this.req('/api/scores/mine')) as PlayResult[];
+  async myScores(all = false): Promise<PlayResult[]> {
+    return (await this.req('/api/scores/mine' + (all ? '?all=1' : ''))) as PlayResult[];
   }
 
   async chartStats(chartId: string, keys: number): Promise<ChartStatistics> {

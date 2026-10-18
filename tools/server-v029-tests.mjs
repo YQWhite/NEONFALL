@@ -37,7 +37,7 @@ const chart = { format: 'neonfall-chart', version: 1, keys: 4, od: 8, hp: 5, sta
   timing: [{ t: 0, bpm: 120 }], sv: [], breaks: [], notes: [{ t: 0, col: 0 }, { t: 500, col: 1, end: 1500 }, { t: 2000, col: 2 }] };
 try {
   const base = await start(), api = new ServerApi(base);
-  check(await api.ping(), true, 'ping'); check(api.serverVersion, '0.2.9', 'server version');
+  check(await api.ping(), true, 'ping'); check(api.serverVersion, require('../package.json').version, 'server version');
   check(api.scoreVersion, 2, 'score capability'); check(api.ratingVersion, 4, 'rating capability'); check(api.statisticsVersion, 1, 'statistics capability');
   check(api.announcement.title, '服务器公告', 'default announcement');
   fs.writeFileSync(path.join(directory, 'server-info.json'), JSON.stringify({ announcement: { title: '更新公告', body: '欢迎\n这是纯文本 <b>内容</b>', updatedAt: '2026-10-18' } }));

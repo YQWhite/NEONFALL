@@ -172,7 +172,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost'), p = decodeURIComponent(url.pathname), method = req.method;
     const u = authenticate(req), admin = isAdmin(req); const ok = (data, status = 200) => json(res, status, data);
-    if (p === '/api/ping' && method === 'GET') return ok({ ok: true, name: 'neonfall-server', version: '0.2.9', ratingVersion: 4, scoreVersion: 2, statisticsVersion: 1, announcement: serverAnnouncement(), charts: listCharts().length, users: Object.keys(users).length, uploadPolicy: UPLOADS ? 'authenticated' : 'disabled', emailVerification: !!(mailConfig().enabled && mailConfig().host), avatars: true });
+    if (p === '/api/ping' && method === 'GET') return ok({ ok: true, name: 'neonfall-server', version: '0.2.10', ratingVersion: 4, scoreVersion: 2, statisticsVersion: 1, announcement: serverAnnouncement(), charts: listCharts().length, users: Object.keys(users).length, uploadPolicy: UPLOADS ? 'authenticated' : 'disabled', emailVerification: !!(mailConfig().enabled && mailConfig().host), avatars: true });
     if (p === '/api/register' && method === 'POST') {
       if (rateLimit(req, 'register', 10, 3600000)) throw httpError(429, 'too many registration attempts; try later'); const b = await readJson(req);
       if (!b || typeof b.username !== 'string' || !/^[A-Za-z0-9_]{3,16}$/.test(b.username)) throw httpError(400, 'username: 3-16 letters, digits or underscores');
@@ -296,7 +296,11 @@ const server = http.createServer(async (req, res) => {
       const table = scoreTable(chart, keys, 2), ownIndex = u ? table.findIndex(s => s.username === u.username) : -1;
       return ok({ ...chartStatistics(community, chart, keys), personalBest: ownIndex >= 0 ? publicScore(table[ownIndex], ownIndex, u) : null });
     }
-    if (p === '/api/scores/mine' && method === 'GET') { if (!u) throw httpError(401, 'not signed in'); return ok(scores.filter(s => s.username === u.username).sort((a, b) => b.playedAt - a.playedAt).slice(0, 100)); }
+    if (p === '/api/scores/mine' && method === 'GET') {
+      if (!u) throw httpError(401, 'not signed in');
+      const own = scores.filter(s => s.username === u.username).sort((a, b) => b.playedAt - a.playedAt);
+      return ok(url.searchParams.get('all') === '1' ? own : own.slice(0, 100));
+    }
     if (p === '/api/leaderboard' && method === 'GET') return ok(globalLeaderboard(users, scores, url.searchParams.get('metric'), avatarUrl));
     if (p.startsWith('/api/')) throw httpError(404, 'API route not found'); if (method !== 'GET' && method !== 'HEAD') throw httpError(405, 'method not allowed');
     if (p.includes('\0') || p.includes('\\')) throw httpError(400, 'invalid path'); let full = path.resolve(DIST, '.' + (p === '/' ? '/index.html' : p));

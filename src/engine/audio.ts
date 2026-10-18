@@ -15,9 +15,17 @@ export class AudioEngine {
   private musicStartSec = 0;
   private pausedSec = 0;
   private playing = false;
-  private decodeCache = new Map<string, AudioBuffer>();
+  // Imported archives expose immutable byte arrays. File names alone are not
+  // identities: different skins commonly all contain `combobreak.ogg`.
+  // Weak IDs avoid retaining the encoded files after an archive is released.
+  private decodeSources = new WeakMap<Uint8Array, number>();
+  private nextDecodeSource = 0;
+  private decodeCache = new Map<number, AudioBuffer>();
+  private pendingDecodes = new Map<number, Promise<AudioBuffer>>();
   private synthCache = new Map<string, AudioBuffer>();
   baseLatencyMs = 0;
+  private musicVolume = .9;
+  private effectsVolume = .7;
 
   ensure(): AudioContext {
     if (!this.ctx) {
@@ -29,6 +37,8 @@ export class AudioEngine {
       this.musicGain.connect(this.master);
       this.sfxGain = this.ctx.createGain();
       this.sfxGain.connect(this.master);
+      this.musicGain.gain.value = this.musicVolume;
+      this.sfxGain.gain.value = this.effectsVolume;
       this.baseLatencyMs = ((this.ctx.baseLatency ?? 0) + (this.ctx.outputLatency ?? 0)) * 1000;
       if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => undefined);
     }
@@ -36,30 +46,54 @@ export class AudioEngine {
   }
 
   applySettings(s: Settings) {
+    this.musicVolume = clamp(s.musicVolume, 0, 1);
+    this.effectsVolume = clamp(s.sfxVolume, 0, 1);
+    this.setPreviewVolume(this.musicVolume);
     if (!this.ctx || !this.musicGain || !this.sfxGain) return;
-    this.musicGain.gain.value = s.musicVolume;
-    this.sfxGain.gain.value = s.sfxVolume;
+    this.musicGain.gain.value = this.musicVolume;
+    this.sfxGain.gain.value = this.effectsVolume;
     if (this.master) this.master.gain.value = 1;
   }
 
-  async decode(bytes: Uint8Array, key: string): Promise<AudioBuffer> {
-    const cached = this.decodeCache.get(key);
-    if (cached) return cached;
-    const ctx = this.ensure();
-    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    let buf: AudioBuffer;
-    try {
-      buf = await ctx.decodeAudioData(ab);
-    } catch {
-      // some browsers fail on raw ArrayBuffer for certain containers; retry on a fresh copy
-      const copy = new Uint8Array(bytes);
-      buf = await ctx.decodeAudioData(
-        copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength) as ArrayBuffer,
-      );
+  async decode(bytes: Uint8Array, _key: string): Promise<AudioBuffer> {
+    let source = this.decodeSources.get(bytes);
+    if (source === undefined) {
+      source = ++this.nextDecodeSource;
+      this.decodeSources.set(bytes, source);
     }
-    if (this.decodeCache.size > 24) this.decodeCache.clear();
-    this.decodeCache.set(key, buf);
-    return buf;
+    const cached = this.decodeCache.get(source);
+    if (cached) {
+      // Keep frequently used hit/miss samples when less frequent assets load.
+      this.decodeCache.delete(source);
+      this.decodeCache.set(source, cached);
+      return cached;
+    }
+    const pending = this.pendingDecodes.get(source);
+    if (pending) return pending;
+    const cacheSource = source;
+    const decoding = (async () => {
+      const ctx = this.ensure();
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      let buf: AudioBuffer;
+      try {
+        buf = await ctx.decodeAudioData(ab);
+      } catch {
+        // Some browsers reject the first container buffer; retry a fresh copy.
+        const copy = new Uint8Array(bytes);
+        buf = await ctx.decodeAudioData(copy.buffer as ArrayBuffer);
+      }
+      this.decodeCache.set(cacheSource, buf);
+      while (this.decodeCache.size > 24) {
+        this.decodeCache.delete(this.decodeCache.keys().next().value!);
+      }
+      return buf;
+    })();
+    this.pendingDecodes.set(source, decoding);
+    try {
+      return await decoding;
+    } finally {
+      this.pendingDecodes.delete(source);
+    }
   }
 
   async loadMusic(bytes: Uint8Array, key: string, signal?: AbortSignal) {
@@ -226,7 +260,9 @@ export class AudioEngine {
   private previewStartCtx = 0;
   private previewOffset = 0;
   private previewLoopStart = 0;
+  private previewLooping = true;
   private previewVolume = 0;
+  private previewVolumeRevision = 0;
   private previewDucking = 1;
   private previewPaused = false;
   private previewAnalysers: AnalyserNode[] = [];
@@ -334,18 +370,20 @@ export class AudioEngine {
    * the song, looping back to the preview point. Replaced atomically per call —
    * late-decoding buffers from a previous selection can never override the new one.
    */
-  async previewMusic(bytes: Uint8Array, key: string, fromMs: number, volume: number) {
+  async previewMusic(bytes: Uint8Array, key: string, fromMs: number, volume: number, canStart?: () => boolean) {
     const token = ++this.previewToken;
+    const volumeRevision = this.previewVolumeRevision;
     let buf: AudioBuffer;
     try {
       buf = await this.decode(bytes, key);
     } catch {
       return false;
     }
-    if (token !== this.previewToken) return false; // superseded while decoding
+    if (token !== this.previewToken || canStart && !canStart()) return false; // superseded while decoding
     this.previewBuffer = buf;
     this.previewLoopStart = clamp(Math.max(0, fromMs) / 1000, 0, Math.max(0, buf.duration - 0.1));
-    this.previewVolume = volume;
+    // Settings may change while a large song is decoding. Keep the latest gain.
+    if (volumeRevision === this.previewVolumeRevision) this.previewVolume = clamp(volume, 0, 1);
     this.startPreviewAt(this.previewLoopStart, .3);
     return true;
   }
@@ -360,7 +398,7 @@ export class AudioEngine {
     const loopStart = this.previewLoopStart;
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.loop = true;
+    src.loop = this.previewLooping;
     src.loopStart = loopStart;
     src.loopEnd = dur;
     const g = ctx.createGain();
@@ -384,7 +422,7 @@ export class AudioEngine {
         this.previewAnalysers.push(analyser);
       }
     } else src.connect(g);
-    g.connect(this.master!); // preview volume independent of music gain
+    g.connect(this.master!); // same music setting, with a separate fade/duck envelope
     const start = clamp(offset, 0, Math.max(0, dur - 0.01));
     this.previewStartCtx = ctx.currentTime + 0.02;
     this.previewOffset = start;
@@ -438,6 +476,21 @@ export class AudioEngine {
 
   cancelPreviewLoad() { this.previewToken++; }
 
+  /** Playlist endings stop in the audio graph, even while the UI is loading. */
+  setPreviewLooping(looping: boolean) {
+    if (looping === this.previewLooping) return;
+    const position = this.previewTimeSec;
+    this.previewLooping = looping;
+    if (this.previewSrc && this.ctx) {
+      this.previewSrc.loop = looping;
+      this.previewOffset = position;
+      this.previewStartCtx = this.ctx.currentTime;
+      // Returning to song select after a playlist track has ended resumes its
+      // single-song preview, rather than enabling loop on a stopped source.
+      if (looping && this.previewBuffer && position >= this.previewBuffer.duration) this.startPreviewAt(this.previewLoopStart);
+    }
+  }
+
   stopPreview() {
     this.previewToken++; // cancel any in-flight decode
     this.previewTransportRevision++;
@@ -467,7 +520,8 @@ export class AudioEngine {
   }
 
   setPreviewVolume(volume: number) {
-    this.previewVolume = Math.max(0, volume);
+    this.previewVolumeRevision++;
+    this.previewVolume = clamp(volume, 0, 1);
     if (this.previewGain && this.ctx) {
       this.previewGain.gain.cancelScheduledValues(this.ctx.currentTime);
       this.previewGain.gain.setValueAtTime(this.previewVolume * this.previewDucking, this.ctx.currentTime);
@@ -491,11 +545,15 @@ export class AudioEngine {
     if (!this.previewSrc || !this.ctx || !this.previewBuffer) return this.previewOffset;
     const t = this.previewOffset + Math.max(0, this.ctx.currentTime - this.previewStartCtx);
     const duration = this.previewBuffer.duration;
+    if (!this.previewLooping) return Math.min(t, duration);
     const span = duration - this.previewLoopStart;
     return t < duration || span <= 0 ? t : this.previewLoopStart + (t - duration) % span;
   }
 
   get previewDurationSec(): number { return this.previewBuffer?.duration ?? 0; }
+  get previewEnded(): boolean {
+    return !this.previewLooping && !!this.previewSrc && !!this.previewBuffer && this.previewTimeSec >= this.previewBuffer.duration;
+  }
   /** Changes only on transport actions, never on a slow frame or a natural loop. */
   get previewTimelineRevision(): number { return this.previewTransportRevision; }
   /** Completed loops of this source; a user seek/resume starts a new source. */
@@ -503,6 +561,7 @@ export class AudioEngine {
     if (!this.previewSrc || !this.ctx || !this.previewBuffer) return 0;
     const elapsed = this.previewOffset + Math.max(0, this.ctx.currentTime - this.previewStartCtx);
     const duration = this.previewBuffer.duration, span = duration - this.previewLoopStart;
+    if (!this.previewLooping) return elapsed >= duration ? 1 : 0;
     return elapsed < duration || span <= 0 ? 0 : Math.floor((elapsed - duration) / span) + 1;
   }
   get isPreviewPaused(): boolean { return this.previewPaused; }

@@ -2,8 +2,8 @@
 import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate';
 import { sha1Fallback } from './sha1.ts';
 export type ByteMap = Map<string, Uint8Array>;
-export function unzipToMap(data: Uint8Array): ByteMap {
-  const files = unzipSync(data);
+export function unzipToMap(data: Uint8Array, paths?: ReadonlySet<string>): ByteMap {
+  const files = unzipSync(data, paths ? { filter: file => paths.has(normPath(file.name).toLowerCase()) } : undefined);
   const map: ByteMap = new Map();
   for (const key of Object.keys(files)) map.set(normPath(key), files[key]);
   return map;

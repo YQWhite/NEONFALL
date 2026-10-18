@@ -3,10 +3,11 @@ import type { NFSkin, Mods, Settings } from '../core/types.ts';
 import { PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX } from '../core/types.ts';
 import { clamp } from '../core/zip.ts';
 import type { PlaySession } from './play.ts';
-import { tr } from '../ui/i18n.ts';
 import { mspArtPaths, mspCatPoses } from './msp-art.ts';
 import { skinBounds } from '../ui/skin-art.ts';
 import type { FieldOrigin } from './lane-geometry.ts';
+
+const JUDGMENT_LABELS = { perfect: 'MAX', great: '300', good: '200', ok: '100', bad: '50', miss: 'MISS' };
 
 export class SkinImages {
   private images = new Map<string, HTMLImageElement>();
@@ -76,22 +77,55 @@ export class PlayfieldRenderer {
   private rasterScaleY = 1;
   private rasterOffsetY = 0;
   private bodyPatterns = new WeakMap<CanvasRenderingContext2D, Map<HTMLImageElement, CanvasPattern>>();
+  private judgmentAnimations: NonNullable<NFSkin['judgmentAnimations']> = {};
 
   constructor(skin: NFSkin | null, getAsset: (p: string) => Uint8Array | undefined, settings: Settings, mods: Mods) {
     this.skin = skin;
     this.images = new SkinImages(getAsset);
     this.settings = settings;
     this.mods = mods;
+    for (const grade of ['perfect', 'great', 'good', 'ok', 'bad', 'miss'] as const) {
+      const animation = skin?.judgmentAnimations?.[grade];
+      if (animation?.frames?.length) {
+        this.judgmentAnimations[grade] = { frames: animation.frames.slice(0, 240), fps: clamp(animation.fps || 60, 1, 120) };
+        continue;
+      }
+      // Older NFSK exports may contain animation files without metadata. Use
+      // their retained numbered assets without changing or rewriting the skin.
+      const path = skin?.judgments?.[grade];
+      if (!path || skin?.source?.type === 'msp' || skin?.msp) continue;
+      const match = /^(.*?)(?:-0)?(@2x)?(\.[^.\/]+)$/.exec(path);
+      if (!match) continue;
+      const frames: string[] = [];
+      for (let i = 0; i < 240; i++) {
+        const candidates = [`${match[1]}-${i}${match[2] ?? ''}${match[3]}`,
+          `${match[1]}-${i}${match[2] ? '' : '@2x'}${match[3]}`];
+        const frame = candidates.find(p => !!getAsset(p));
+        if (!frame) break;
+        frames.push(frame);
+      }
+      if (frames.length) this.judgmentAnimations[grade] = { frames, fps: 60 };
+    }
   }
 
-  beatHeight(): number {
-    // Storage remains pixels/ms at 120 BPM; UI x1 is .55 (275px/beat).
-    return 500 * this.settings.scrollSpeed * this.mods.speed;
+  beatHeight(session?: PlaySession): number {
+    // Normalise each song to its dominant BPM, like mania fixed scroll speed.
+    // ConstantSpeed sessions use the separate 120 BPM map and 500ms baseline.
+    return (session?.scrollBeatLength ?? 500) * this.settings.scrollSpeed * this.mods.speed;
   }
 
   /** Await while the loading screen is visible, including all animation frames. */
-  prepareSkinArt(): Promise<unknown[]> {
-    return Promise.all(mspArtPaths(this.skin).map(path => this.images.load(path)));
+  async prepareSkinArt(): Promise<unknown[]> {
+    const judgmentPaths = new Set([...Object.values(this.skin?.judgments ?? {}),
+      ...Object.values(this.judgmentAnimations).flatMap(animation => animation?.frames ?? [])]);
+    const images = await Promise.all([...new Set([...mspArtPaths(this.skin), ...judgmentPaths])].map(path => this.images.load(path)));
+    // Avoid a full image pixel scan on the first inaccurate hit or animation
+    // frame. This happens once during loading and skinBounds caches the result.
+    for (const path of judgmentPaths) {
+      const image = this.images.get(path);
+      if (image) skinBounds(image);
+    }
+    return images;
   }
 
   /** scale mapping 512x480 field into screen w,h */
@@ -493,7 +527,7 @@ export class PlayfieldRenderer {
     hitY: number,
     nowPerf: number,
   ) {
-    const bh = this.beatHeight();
+    const bh = this.beatHeight(sess);
     const t = sess.drawTime();
     const scrollMap = sess.scrollMap ?? sess.timeMap;
     const svNow = scrollMap.svBeatAt(t);
@@ -661,6 +695,8 @@ export class PlayfieldRenderer {
     }
     const headH = head ? colW * head.height / Math.max(1, head.width) : 18;
     const tailH = tail ? colW * tail.height / Math.max(1, tail.width) : 0;
+    const bodyX = cx - colW / 2;
+    const tailX = cx - colW / 2;
     // Both cap END-TIME edges stay at their mapped y. Tail artwork is vertically
     // reflected INSIDE that bottom-anchored rectangle, not rotated or shifted
     // below yTop. Extend the body half-way under each cap (osu DrawableHoldNote)
@@ -683,20 +719,20 @@ export class PlayfieldRenderer {
         }
         if (pattern) {
           ctx.save();
-          ctx.translate(cx - colW / 2, top);
+          ctx.translate(bodyX, top);
           ctx.scale(colW / body.width, tileH / body.height);
           ctx.fillStyle = pattern;
           ctx.fillRect(0, 0, body.width, (bottom - top) * body.height / tileH);
           ctx.restore();
         } else for (let y = top; y < bottom; y += tileH) {
             const h = Math.min(tileH, bottom - y);
-            ctx.drawImage(body, 0, 0, body.width, body.height * h / tileH, cx - colW / 2, y, colW, h);
+            ctx.drawImage(body, 0, 0, body.width, body.height * h / tileH, bodyX, y, colW, h);
         }
-      } else ctx.drawImage(body, cx - colW / 2, top, colW, Math.max(1, bottom - top));
+      } else ctx.drawImage(body, bodyX, top, colW, Math.max(1, bottom - top));
     } else if (!body && bottom > top) this.generatedHoldBody(ctx, col, cx, colW, top, bottom);
     if (tail) {
       ctx.save();
-      ctx.translate(cx - colW / 2, yTop);
+      ctx.translate(tailX, yTop);
       if (skinCol?.tailFlip !== false) {
         ctx.scale(1, -1);
         ctx.drawImage(tail, 0, 0, colW, tailH);
@@ -704,9 +740,9 @@ export class PlayfieldRenderer {
       ctx.restore();
     }
     if (held) return;
-    if (head) {
-      ctx.drawImage(head, cx - colW / 2, yHead - headH, colW, headH);
-    } else this.generatedTap(ctx, col, cx, colW, yHead, 18, flash);
+    // osu!mania scales the complete authored sprite, including transparent padding.
+    if (head) ctx.drawImage(head, cx - colW / 2, yHead - headH, colW, headH);
+    else this.generatedTap(ctx, col, cx, colW, yHead, 18, flash);
   }
 
   private cached(path: string): HTMLImageElement | null {
@@ -876,7 +912,11 @@ export class PlayfieldRenderer {
     const grade = (label === 'MEH' ? 'bad' : label.toLowerCase()) as keyof NonNullable<NFSkin['judgments']>;
     const scale = .92 + .08 * clamp(age / 70, 0, 1);
     const fade = age > 600 ? 1 - (age - 600) / 300 : 1;
-    const imgPath = this.skin?.judgments?.[grade], img = imgPath ? this.cached(imgPath) : null;
+    const animation = this.judgmentAnimations[grade];
+    const imgPath = animation?.frames.length
+      ? animation.frames[Math.floor(age * animation.fps / 1000) % animation.frames.length]
+      : this.skin?.judgments?.[grade];
+    const img = imgPath ? this.cached(imgPath) : null;
     ctx.save(); ctx.globalAlpha *= fade;
     const effect = grade === 'perfect' ? this.images.get(this.skin?.msp?.perfectEffect?.image) : null;
     if (effect && age < 400) {
@@ -893,7 +933,7 @@ export class PlayfieldRenderer {
       ctx.font = `700 ${Math.min(24, maxWidth / 4)}px "Segoe UI", Arial`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.shadowColor = popup.color; ctx.shadowBlur = 10; ctx.fillStyle = popup.color;
-      ctx.fillText(tr(label), 0, 0, maxWidth);
+      ctx.fillText(JUDGMENT_LABELS[grade] ?? label, 0, 0, maxWidth);
     }
     ctx.restore();
   }

@@ -1,15 +1,44 @@
-import type { JudgeGrade, NFNote, PlayCounts } from './types.ts';
+import type { JudgeGrade, NFNote, PlayCounts, NFChart } from './types.ts';
 
 /** NF's million-point rules, deliberately versioned separately from old scores. */
 export const SCORING_VERSION = 2;
 export const MAX_SCORE = 1_000_000;
-export const SCROLL_SPEED_BASE = .55;
-export const SCROLL_MULTIPLIER_MIN = .5;
-export const SCROLL_MULTIPLIER_MAX = 4;
+export const SCROLL_TRAVEL = 402;
+export const SCROLL_TIME_RANGE = 11485;
+export const SCROLL_SPEED_BASE = SCROLL_TRAVEL * 8 / SCROLL_TIME_RANGE;
+export const SCROLL_MULTIPLIER_MIN = 1;
+export const SCROLL_MULTIPLIER_MAX = 40;
 
-/** Keep existing saved physical speeds while displaying a real reference multiplier. */
-export function scrollSpeedMultiplier(speed: number): number { return speed / SCROLL_SPEED_BASE; }
-export function scrollSpeedFromMultiplier(multiplier: number): number { return multiplier * SCROLL_SPEED_BASE; }
+/** osu!lazer mania: ComputeScrollTime(speed) = 11485 / speed milliseconds.
+ * osu's default hit position is 402 in the shared 480-unit coordinate system.
+ * Keep this reference fixed when skin or user field position changes.
+ * Stored values stay logical pixels/ms, preserving existing speed preferences. */
+export function scrollSpeedMultiplier(speed: number): number { return speed * SCROLL_TIME_RANGE / SCROLL_TRAVEL; }
+export function scrollSpeedFromMultiplier(multiplier: number): number { return multiplier * SCROLL_TRAVEL / SCROLL_TIME_RANGE; }
+export function scrollTimeMs(speed: number): number { return SCROLL_TIME_RANGE / speed; }
+
+/** Cache once per session. Dominant timing normalises each song's base speed;
+ * local BPM/SV changes remain readable unless ConstantSpeed is enabled. */
+export function mainBeatLength(chart: NFChart): number {
+  const points = chart.timing.filter(point => Number.isFinite(point.t) && Number.isFinite(point.bpm) && point.bpm > 0).sort((a, b) => a.t - b.t);
+  if (!points.length) return 500;
+  // End at the final playable object, including overlapping long-note tails.
+  // An extended audio/storyboard outro must not change the chart's main BPM.
+  let end = 0;
+  for (const note of chart.notes) end = Math.max(end, note.end ?? note.t);
+  if (!chart.notes.length) end = Math.max(0, points[points.length - 1].t);
+  const weights = new Map<number, number>();
+  for (let i = 0; i < points.length; i++) {
+    const start = i === 0 ? 0 : Math.max(0, points[i].t);
+    const duration = Math.max(0, Math.min(end, points[i + 1]?.t ?? end) - start);
+    // Match osu's millisecond precision when grouping near-identical timings.
+    const beatLength = Math.round(60000 / points[i].bpm * 1000) / 1000;
+    weights.set(beatLength, (weights.get(beatLength) || 0) + duration);
+  }
+  let beatLength = 60000 / points[0].bpm, duration = -1;
+  for (const [candidate, weight] of weights) if (weight > duration) { beatLength = candidate; duration = weight; }
+  return beatLength;
+}
 
 /**
  * osu!mania ScoreV2 hit windows. Signed errors are rounded to milliseconds;

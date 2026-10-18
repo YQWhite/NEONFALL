@@ -44,7 +44,7 @@ for (const name of ['package.json', 'LICENSE']) addFile(server, path.join(fflate
 walk(path.join(fflateRoot, 'lib'), (source, name) => addFile(server, source, `node_modules/fflate/lib/${name}`));
 const fflateVersion = JSON.parse(fs.readFileSync(path.join(fflateRoot, 'package.json'), 'utf8')).version;
 server['package.json'] = strToU8(JSON.stringify({
-  name: 'neonfall-server', private: true, version: '0.2.9',
+  name: 'neonfall-server', private: true, version: '0.2.10',
   description: 'NEONFALL Web and central chart server deployment',
   scripts: { start: 'node server/server.js' },
   engines: { node: '>=22.18.0' },

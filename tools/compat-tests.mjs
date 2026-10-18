@@ -42,7 +42,7 @@ for (const c of layout.columns) {
   for(const key of ['keyImg','keyImgD','noteImg','noteImgH','bodyImg','noteImgT']) assert.ok(assets.get(c[key]),key+' '+c[key]);
 }
 const renderer=new PlayfieldRenderer(layout, p=>assets.get(p), {...DEFAULT_SETTINGS},{...DEFAULT_MODS});
-assert.equal(renderer.beatHeight(),275);
+assert.equal(renderer.beatHeight(),500*DEFAULT_SETTINGS.scrollSpeed);
 const session = Object.create(PlaySession.prototype);
 session.skin = layout; session.keys = 4;
 // This lightweight prototype fixture skips constructor field initializers.

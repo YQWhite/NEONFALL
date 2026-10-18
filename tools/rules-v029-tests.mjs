@@ -116,7 +116,7 @@ x = make(Array.from({ length: 60 }, (_, i) => ({ t: 1000 + i * 250, col: i % 4 }
 eq(x.s.phase, 'failed'); eq(x.s.buildResult().failedAtMs, 10000); eq(x.s.buildResult().passed, false); eq(x.s.buildResult().pp, 0);
 const failed = x.s.buildResult().failedAtMs; x.at(11000); eq(x.s.buildResult().failedAtMs, failed, 'first failure position is stable');
 
-eq(scrollSpeedMultiplier(DEFAULT_SETTINGS.scrollSpeed), 1, 'default speed is x1');
+eq(scrollSpeedMultiplier(DEFAULT_SETTINGS.scrollSpeed), 8, 'default mania speed is x8');
 for (const saved of [.4, .55, .85, 1.2, 2]) ok(Math.abs(scrollSpeedFromMultiplier(scrollSpeedMultiplier(saved)) - saved) < 1e-12, 'saved physical speed remains identical');
 
 fs.mkdirSync('test-results/v029', { recursive: true });

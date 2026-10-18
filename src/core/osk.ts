@@ -141,7 +141,31 @@ export function parseOSK(files: ByteMap): { skin: NFSkin; assets: Record<string,
         width: Number.isFinite(widths[i]) && widths[i] > 0 ? widths[i] : columnWidth,
       });
     }
-    const judgment = (name: string, fallback: string): string | undefined => use(get(name)) ?? use(`mania-${fallback}`) ?? use(fallback);
+    const judgmentAnimations: NonNullable<NFSkin['judgmentAnimations']> = {};
+    const judgment = (grade: keyof NonNullable<NFSkin['judgments']>, name: string, fallback: string): string | undefined => {
+      for (const candidate of [get(name), `mania-${fallback}`, fallback]) {
+        if (!candidate) continue;
+        // osu!mania hit bursts prefer numbered frames over the static image.
+        // Skins often deliberately use a transparent static placeholder and
+        // put the actual 200/100/50/MISS artwork in their sole "-0" frame.
+        const base = candidate.replace(/\.(png|jpe?g|webp|gif)$/i, '').replace(/@2x$/i, '');
+        const frames: string[] = [];
+        for (let i = 0; i < 240; i++) {
+          const frame = use(`${base}-${i}`);
+          if (!frame) break;
+          frames.push(frame);
+        }
+        if (frames.length) {
+          // The mania hit bursts loop at 60 FPS, independent of the General
+          // AnimationFramerate used by other osu skin elements.
+          judgmentAnimations[grade] = { frames, fps: 60 };
+          return frames[0];
+        }
+        const image = use(candidate);
+        if (image) return image;
+      }
+      return undefined;
+    };
     const layout: NFSkin = {
       format: 'neonfall-skin', version: 1, name: skinName, author, keys,
       columnStart: get('ColumnStart') === undefined ? undefined : numberValue(get('ColumnStart'), 0),
@@ -158,10 +182,11 @@ export function parseOSK(files: ByteMap): { skin: NFSkin; assets: Record<string,
         hint: use(get('StageHint') ?? 'mania-stage-hint'), warning: use('mania-warningarrow'),
       },
       judgments: {
-        perfect: judgment('Hit300g', 'hit300g'), great: judgment('Hit300', 'hit300'),
-        good: judgment('Hit200', 'hit200'), ok: judgment('Hit100', 'hit100'),
-        bad: judgment('Hit50', 'hit50'), miss: judgment('Hit0', 'hit0'),
+        perfect: judgment('perfect', 'Hit300g', 'hit300g'), great: judgment('great', 'Hit300', 'hit300'),
+        good: judgment('good', 'Hit200', 'hit200'), ok: judgment('ok', 'Hit100', 'hit100'),
+        bad: judgment('bad', 'Hit50', 'hit50'), miss: judgment('miss', 'Hit0', 'hit0'),
       },
+      judgmentAnimations,
       hitsounds, misc, fonts, hud, grades, assetDensity: density,
     };
     first ??= layout;

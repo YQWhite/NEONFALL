@@ -70,12 +70,12 @@ export class ResultScreen extends Screen {
   }
   draw(ctx: CanvasRenderingContext2D) {
     const { w, h } = this.app, r = this.result; if (!r) return;
-    const compact = h < 560, pad = w < 700 ? 20 : 36;
+    const compact = h < 560, short = h < 400, pad = w < 700 ? 20 : 36;
     drawBlurredBackdrop(ctx, this.cover, w, h, .12);
     text(ctx, 'RESULT', pad, 30, { size: 10, color: THEME.accent2, spacing: '2px' });
     text(ctx, r.title, pad, 62, { size: compact ? 21 : 28, weight: 600, maxWidth: w - pad * 2, translate: false });
     text(ctx, `${r.version} · ${r.keys}K · ${r.stars.toFixed(2)} ★`, pad, 84, { size: 12, color: THEME.dim, maxWidth: w - pad * 2, translate: false });
-    const py = compact ? 100 : 118, ph = h - py - 88;
+    const py = short ? 94 : compact ? 100 : 118, ph = h - py - 88;
     const heroW = Math.max(155, Math.min(320, w * .29)), gap = 18, px = pad + heroW + gap, pw = w - px - pad;
     fillPanel(ctx, pad, py, heroW, ph, { r: 20, fill: '#1b2b27', line: '#3b5148' });
     const fullCombo = r.passed && r.counts.miss === 0 && r.counts.bad === 0;
@@ -87,22 +87,24 @@ export class ResultScreen extends Screen {
     if (r.mods.length) text(ctx, modsLabel(r.mods), pad + heroW / 2, py + ph - 16, { size: 9, color: THEME.dim, align: 'center', maxWidth: heroW - 20, translate: false });
     fillPanel(ctx, px, py, pw, ph, { r: 20, fill: '#151f27' });
     const ip = compact ? 18 : 28, x = px + ip, inner = pw - ip * 2;
-    text(ctx, r.scoreVersion === 2 ? 'SCORE / 1,000,000' : 'LEGACY SCORES', x, py + 28, { size: 10, color: THEME.dim, maxWidth: Math.max(50, inner - 106) });
-    text(ctx, r.score.toLocaleString(), x, py + (compact ? 62 : 83), { size: compact ? 30 : 48, weight: 600, color: '#edf4ef', maxWidth: inner });
-    let y = py + (compact ? 87 : 122);
+    text(ctx, r.scoreVersion === 2 ? 'SCORE / 1,000,000' : 'LEGACY SCORES', x, py + (short ? 20 : 28), { size: 10, color: THEME.dim, maxWidth: Math.max(50, inner - 106) });
+    text(ctx, r.score.toLocaleString(), x, py + (short ? 44 : compact ? 62 : 83), { size: short ? 24 : compact ? 30 : 48, weight: 600, color: '#edf4ef', maxWidth: inner });
+    let y = py + (short ? 64 : compact ? 87 : 122);
     for (const [i, item] of [['ACCURACY', (r.acc * 100).toFixed(2) + '%'], ['MAX COMBO', r.maxCombo + '×']].entries()) {
       const sx = x + i * (inner / 2);
       text(ctx, item[0], sx, y, { size: 9, color: THEME.dim });
-      text(ctx, item[1], sx, y + (compact ? 22 : 32), { size: compact ? 18 : 28, color: THEME.accent });
+      text(ctx, item[1], sx, y + (short ? 18 : compact ? 22 : 32), { size: compact ? 18 : 28, color: THEME.accent });
     }
-    y += compact ? 42 : 64;
-    ctx.fillStyle = THEME.panelLine; ctx.fillRect(x, y, inner, 1); y += compact ? 18 : 28;
+    y += short ? 36 : compact ? 42 : 64;
+    ctx.fillStyle = THEME.panelLine; ctx.fillRect(x, y, inner, 1); y += short ? 16 : compact ? 18 : 28;
     if (!compact) { text(ctx, 'JUDGMENT BREAKDOWN', x, y, { size: 10, color: THEME.dim }); y += 28; }
-    const counts = [['PERFECT', r.counts.perfect, THEME.gold], ['GREAT', r.counts.great, THEME.accent], ['GOOD', r.counts.good, THEME.green], ['OK', r.counts.ok, THEME.violet], [r.scoreVersion === 2 ? 'MEH' : 'BAD', r.counts.bad, THEME.orange], ['MISS', r.counts.miss, THEME.red]] as const;
-    const step = compact ? 23 : 44;
+    // osu!mania's six grades: MAX (大 P), 300 (小 P), 200, 100, 50, MISS.
+    // Keep stored count keys and legacy scoring untouched; only the labels change.
+    const counts = [['MAX', r.counts.perfect, THEME.gold], ['300', r.counts.great, THEME.accent], ['200', r.counts.good, THEME.green], ['100', r.counts.ok, THEME.violet], ['50', r.counts.bad, THEME.orange], ['MISS', r.counts.miss, THEME.red]] as const;
+    const step = short ? 16 : compact ? 23 : 44;
     counts.forEach(([label, count, color], i) => {
       const cx = x + i % 3 * (inner / 3), cy = y + Math.floor(i / 3) * step;
-      text(ctx, label, cx, cy, { size: 9, color, maxWidth: inner / 3 - 8 });
+      text(ctx, label, cx, cy, { size: 9, color, maxWidth: inner / 3 - 8, translate: false });
       text(ctx, String(count), cx + inner / 3 - 12, cy, { size: compact ? 11 : 16, color: count ? THEME.text : THEME.dim, align: 'right' });
     });
     if (!compact && y + step * 2 + 25 < py + ph) {

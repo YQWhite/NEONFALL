@@ -22,6 +22,15 @@ export function buildNFM(chart: NFChart, assets: Record<string, Uint8Array>): Ui
 
 export function readNFM(data: Uint8Array): NFMArchive {
   const files = unzipToMap(data);
+  return parseNFMFiles(files);
+}
+
+/** Registering a download needs metadata, never every storyboard/audio asset. */
+export function readNFMMetadata(data: Uint8Array): NFChart {
+  return parseNFMFiles(unzipToMap(data, new Set(['chart.nf']))).chart;
+}
+
+export function parseNFMFiles(files: Map<string, Uint8Array>): NFMArchive {
   const raw = findCI(files, 'chart.nf');
   if (!raw) throw new Error('Not a valid .nfm package (missing chart.nf)');
   const chart = JSON.parse(bytesToStr(raw)) as NFChart;

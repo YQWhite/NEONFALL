@@ -5,10 +5,12 @@ import { text, fillPanel, clamp01 } from '../theme.ts';
 import { bridge } from '../../core/store.ts';
 import type { MenuVisual } from '../menu-music.ts';
 import { drawMenuFountains } from '../menu-fountain.ts';
+import { DEFAULT_MENU_EDGE_COLOR } from '../menu-palette.ts';
 
 /** Beat-synchronised edge gradients and a restrained wash behind the content. */
 export function drawMenuBeatEdges(ctx: CanvasRenderingContext2D, w: number, h: number, visual: MenuVisual) {
   if (visual.reducedMotion) return;
+  const rgb = (visual.edgeColor ?? DEFAULT_MENU_EDGE_COLOR).join(',');
   const sideWidth = visual.previewSection ? Math.min(116, w * .11) : Math.min(72, w * .07);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -21,21 +23,21 @@ export function drawMenuBeatEdges(ctx: CanvasRenderingContext2D, w: number, h: n
       // Two-beat normal pulses remain bilateral; kiai alternates sides. The
       // broad wash is deliberately much dimmer than the bright edge core.
       const wash = ctx.createLinearGradient(0, 0, w / 2, 0);
-      wash.addColorStop(0, `rgba(255,255,255,${visual.previewSection ? .065 : .025})`);
-      wash.addColorStop(.5, `rgba(255,255,255,${visual.previewSection ? .028 : .01})`);
-      wash.addColorStop(1, 'rgba(255,255,255,0)');
+      wash.addColorStop(0, `rgba(${rgb},${visual.previewSection ? .065 : .025})`);
+      wash.addColorStop(.5, `rgba(${rgb},${visual.previewSection ? .028 : .01})`);
+      wash.addColorStop(1, `rgba(${rgb},0)`);
       ctx.globalAlpha = impact * impact;
       ctx.fillStyle = wash; ctx.fillRect(0, 0, w / 2, h);
     }
     const glow = ctx.createLinearGradient(0, 0, sideWidth, 0);
-    glow.addColorStop(0, 'rgba(255,255,255,0.56)');
-    glow.addColorStop(.18, 'rgba(255,255,255,0.30)');
-    glow.addColorStop(.55, 'rgba(255,255,255,0.10)');
-    glow.addColorStop(1, 'rgba(255,255,255,0)');
+    glow.addColorStop(0, `rgba(${rgb},0.56)`);
+    glow.addColorStop(.18, `rgba(${rgb},0.30)`);
+    glow.addColorStop(.55, `rgba(${rgb},0.10)`);
+    glow.addColorStop(1, `rgba(${rgb},0)`);
     ctx.globalAlpha = impact;
     ctx.fillStyle = glow; ctx.fillRect(0, 0, sideWidth, h);
     ctx.globalAlpha = impact * (visual.previewSection ? .65 : .52);
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 1, h);
+    ctx.fillStyle = `rgb(${rgb})`; ctx.fillRect(0, 0, 1, h);
     ctx.restore();
   }
   ctx.restore();
@@ -47,7 +49,7 @@ export class MenuScreen extends Screen {
   private visual: MenuVisual = { bands: new Float32Array(17), pulse: 0, energy: 0, position: 0, leftImpact: 0, rightImpact: 0, sectionBurst: 0, previewSection: false };
 
   enter() { this.t0 = performance.now(); }
-  update(dt: number, _now: number) { this.visual = this.app.menuMusic.visualizer(dt); }
+  update(dt: number, now: number) { this.visual = this.app.menuMusic.visualizer(dt, now); }
 
   keyDown(code: string) {
     if (code === 'Enter' || code === 'NumpadEnter') {

@@ -12,7 +12,7 @@ for (const font of ['C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/segoeui.ttf']
 
 let reduced = false, bass = .2, energy = .6;
 globalThis.window = { matchMedia: () => ({ get matches() { return reduced; } }) };
-const settings = { particles: true, previewVolume: .4 };
+const settings = { particles: true, musicVolume: .4 };
 const audio = { previewTimeSec: 0, previewActive: true, ctx: { state: 'running' },
   samplePreviewSpectrum: () => ({ bands: new Float32Array(17).fill(.35), bass, energy }) };
 const music = new MenuMusic({ settings, audio });
@@ -63,7 +63,7 @@ const expectQuiet = reason => {
 };
 audio.previewActive = false; expectQuiet('paused'); audio.previewActive = true;
 energy = 0; expectQuiet('silent audio'); energy = .6;
-settings.previewVolume = 0; expectQuiet('preview muted'); settings.previewVolume = .4;
+settings.musicVolume = 0; expectQuiet('preview muted'); settings.musicVolume = .4;
 audio.ctx.state = 'suspended'; expectQuiet('audio suspended'); audio.ctx.state = 'running';
 settings.particles = false;
 audio.previewTimeSec = 1.96; music.visualizer(16); audio.previewTimeSec = 2; visual = music.visualizer(40);
@@ -171,7 +171,7 @@ async function entryFixture(source,fromStart=true,initialState='running'){
   let sampleEnergy=.6,analysisCount=0;
   engine.samplePreviewSpectrum=()=>({bands:new Float32Array(17).fill(sampleEnergy),bass:.2,energy:sampleEnergy});
   engine.previewHighlightMs=()=>{analysisCount++;return 1000;};
-  const app={settings:{particles:true,previewVolume:.4},screen:{name:'menu'},audio:engine,
+  const app={settings:{particles:true,musicVolume:.4},screen:{name:'menu'},audio:engine,
     store:{getChartBytes:async()=>packageChart(source.chart),listCharts:async()=>[]}};
   const controller=new MenuMusic(app);controller.enabled=true;
   await controller.select({id:'entry-'+source.name,title:source.name},fromStart);
@@ -241,7 +241,7 @@ console.log('PASS real NFM/AudioEngine native, authored-preview and computed ent
 for(const kind of ['pause','mute','seek','reduced-motion']){
   const f=await entryFixture(entrySources[0]);f.advance(960);f.energy(0);f.advance(40);
   if(kind==='pause'){f.audio.pausePreview();f.frame();f.audio.resumePreview();f.clock.currentTime+=.02;}
-  if(kind==='mute'){f.app.settings.previewVolume=0;f.audio.setPreviewVolume(0);f.frame();f.app.settings.previewVolume=.4;f.audio.setPreviewVolume(.4);}
+  if(kind==='mute'){f.app.settings.musicVolume=0;f.audio.setPreviewVolume(0);f.frame();f.app.settings.musicVolume=.4;f.audio.setPreviewVolume(.4);}
   if(kind==='seek'){f.audio.seekPreview(2);f.clock.currentTime+=.02;f.frame();}
   if(kind==='reduced-motion'){reduced=true;f.frame();reduced=false;}
   f.energy(.6);assert.equal(f.advance(16).fountainAgeMs,-1,kind+': explicit interruption cancels pending entry without a later spray');
@@ -294,7 +294,7 @@ const packages = new Map([
 const imageLoads=[];let decodeFailure=false,selectedAnalysis=0;
 const archiveAudio={previewActive:true,previewDurationSec:90,cancelPreviewLoad(){},stopAmbient(){},
   async previewMusic(){return !decodeFailure;},previewHighlightMs(){selectedAnalysis++;return 42000;}};
-const archiveApp={settings:{previewVolume:.4},audio:archiveAudio,store:{getChartBytes:async id=>packages.get(id)}};
+const archiveApp={settings:{musicVolume:.4},audio:archiveAudio,store:{getChartBytes:async id=>packages.get(id)}};
 const archiveMusic=new MenuMusic(archiveApp);archiveMusic.enabled=true;
 archiveMusic.loadBackground=()=>new Promise(resolve=>imageLoads.push(resolve));
 await archiveMusic.select({id:'original',title:'Original'},true);
@@ -397,7 +397,7 @@ for(const scenario of [
   const testAudio={previewTimeSec:2,previewActive:true,ctx:{state:'running'},samplePreviewSpectrum(){return {
     bands:new Float32Array(17).fill(strong?.75:.08),bass:strong?.5:.02,energy:strong?.6:.08,
   };}};
-  const app={w,h,ctx,settings:{particles:scenario.particles,previewVolume:.4},audio:testAudio,
+  const app={w,h,ctx,settings:{particles:scenario.particles,musicVolume:.4},audio:testAudio,
     account:{user:null},serverOnline:false,platform:'desktop',version:'0.2.4',uiSound(){},gotoScreen(){}};
   app.ui=new UI(app);app.menuMusic=new MenuMusic(app);
   app.menuMusic.timing=[{t:0,bpm:120}];app.menuMusic.highlightRanges=[{t:2000,end:32000}];

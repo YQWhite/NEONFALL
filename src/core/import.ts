@@ -164,6 +164,11 @@ function collectAssets(
         (skin.judgments as any)[k] = prefix((skin.judgments as any)[k]);
       }
     }
+    if (skin.judgmentAnimations) {
+      for (const animation of Object.values(skin.judgmentAnimations)) {
+        if (animation) animation.frames = animation.frames.map(path => prefix(path)!);
+      }
+    }
     if (skin.hitsounds) {
       for (const set of ['normal', 'soft', 'drum'] as const) {
         const s = skin.hitsounds[set];

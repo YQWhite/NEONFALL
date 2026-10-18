@@ -66,7 +66,7 @@ const sampleDir = new URL('../../samples-converted/', import.meta.url);
 const sampleName = fs.readdirSync(sampleDir).find(f => f.endsWith('.nfm'));
 const sampleBytes = fs.readFileSync(new URL(sampleName, sampleDir));
 let fetchA; const starts = [];
-const app = { settings: { previewVolume: .3 }, serverOnline: false, audio: {
+const app = { settings: { musicVolume: .3 }, serverOnline: false, audio: {
   previewActive: false, isPreviewPaused: false,
   stopPreview() { this.previewActive = false; }, stopAmbient() {},
   async previewMusic(_bytes, key, from) { starts.push({key,from}); this.previewActive = true; },
@@ -131,10 +131,10 @@ console.log('PASS preview-bus spectrum, mute/pause gating, BPM changes and audio
 globalThis.window = { addEventListener() {}, removeEventListener() {} };
 globalThis.document = { body: { appendChild() {} }, createElement() { return { value: '', style: {}, addEventListener() {}, blur() {}, remove() {} }; } };
 const { SelectScreen } = await import('../src/ui/screens/select.ts');
-const treeApp = { w: 800, h: 600, menuMusic: { entry: songs[0], ensureStarted: async () => {} }, ui: { p: {}, cancelPointer() {} }, uiSound() {} };
+const treeApp = { w: 800, h: 600, settings: {}, account: { server: false, user: null }, store: {}, menuMusic: { entry: songs[0], ensureStarted: async () => {} }, ui: { p: {}, cancelPointer() {} }, uiSound() {} };
 const tree = new SelectScreen(treeApp); tree.entries = songs; tree.applyFilter();
 assert.deepEqual(tree.view.map(c => c.id), ['easy', 'medium', 'hard', 'other']);
-assert.equal(tree.entry().id, 'hard', 'initial selection follows the current recording difficulty');
+assert.equal(tree.entry().id, 'easy', 'first visit selects the first chart and expands only its song');
 assert.equal(tree.rows.filter(row => row.header).length, 2);
 let target = tree.rows.find(row => !row.header && tree.view[row.index].id === 'medium');
 tree.scroll = target.top;
@@ -155,7 +155,7 @@ console.log('PASS tree headers, child hit testing, keyboard navigation, resize, 
 const navigationAudio = new AudioEngine(); navigationAudio.ctx = ctx; navigationAudio.master = gain();
 let navigationDecodes = 0;
 navigationAudio.decode = async () => { navigationDecodes++; return { duration: 200 }; };
-const navigationApp = { settings: { previewVolume: .35 }, serverOnline: false, audio: navigationAudio,
+const navigationApp = { settings: { musicVolume: .35 }, serverOnline: false, audio: navigationAudio,
   store: { listCharts: async () => [], getChartBytes: async () => sampleBytes } };
 const navigationMusic = new MenuMusic(navigationApp);
 navigationMusic.setScreen('menu'); await navigationMusic.ensureStarted();
@@ -217,7 +217,7 @@ console.log('PASS every pre-game screen preserves source, clock, manual pause an
 const catalogResolvers = [];
 const catalogAudio = new AudioEngine(); catalogAudio.ctx = ctx; catalogAudio.master = gain();
 catalogAudio.decode = async () => ({ duration: 90 });
-const catalogApp = { settings: { previewVolume: .35 }, serverOnline: false, audio: catalogAudio,
+const catalogApp = { settings: { musicVolume: .35 }, serverOnline: false, audio: catalogAudio,
   store: { listCharts: () => new Promise(resolve => catalogResolvers.push(resolve)), getChartBytes: async () => sampleBytes } };
 const catalogMusic = new MenuMusic(catalogApp);
 catalogMusic.setScreen('menu');
@@ -238,10 +238,15 @@ console.log('PASS rapid play/submenu re-entry and out-of-order initial catalogue
 
 // Playlist advance is driven by the audio clock/update, without drawing the
 // player on settings/account/import. A seek is not a natural song completion.
+const waitMusic = async music => {
+  const deadline = Date.now() + 3000;
+  do { await new Promise(resolve => setTimeout(resolve, 5)); } while ((music.loading || music.autoAdvancing) && Date.now() < deadline);
+  assert.ok(!music.loading && !music.autoAdvancing, 'asynchronous menu media extraction finishes');
+};
 const autoAudio = new AudioEngine(); autoAudio.ctx = ctx; autoAudio.master = gain();
 autoAudio.decode = async () => ({ duration: 30 });
 let autoEntries = [entry('auto-a', 'First recording', 1), entry('auto-a-hard', 'First recording', 5), entry('auto-b', 'Second recording', 2)];
-const autoApp = { settings: { previewVolume: .35 }, serverOnline: false, audio: autoAudio,
+const autoApp = { settings: { musicVolume: .35 }, serverOnline: false, audio: autoAudio,
   store: { listCharts: async () => [], getChartBytes: async () => sampleBytes } };
 const autoMusic = new MenuMusic(autoApp);
 autoMusic.setScreen('settings'); await autoMusic.ensureStarted();
@@ -249,19 +254,20 @@ autoApp.store.listCharts = async () => autoEntries;
 await autoMusic.select(autoEntries[0], true); autoMusic.update();
 assert.equal(autoAudio.previewLoopCount, 0);
 ctx.currentTime += 31; assert.equal(autoAudio.previewLoopCount, 1); autoMusic.update();
-await new Promise(resolve => setTimeout(resolve, 0));
+await waitMusic(autoMusic);
 assert.equal(autoMusic.entry.id, 'auto-b', 'submenu clock advances to a different recording');
 autoAudio.pausePreview(); ctx.currentTime += 80; autoMusic.update();
-await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(autoMusic.entry.id, 'auto-b', 'manual pause never advances');
+await waitMusic(autoMusic); assert.equal(autoMusic.entry.id, 'auto-b', 'manual pause never advances');
 autoAudio.resumePreview(); autoMusic.update();
 autoAudio.seekPreview(29); autoMusic.update();
 autoAudio.seekPreview(0); autoMusic.update();
-await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(autoMusic.entry.id, 'auto-b', 'manual seeks never advance');
+await waitMusic(autoMusic); assert.equal(autoMusic.entry.id, 'auto-b', 'manual seeks never advance');
 autoEntries = [autoEntries[2]];
 const singleSource = autoAudio.previewSrc;
 ctx.currentTime += 31; autoMusic.update();
-await new Promise(resolve => setTimeout(resolve, 0));
-assert.equal(autoAudio.previewSrc, singleSource, 'single-recording library loops continuously');
+await waitMusic(autoMusic);
+assert.notEqual(autoAudio.previewSrc, singleSource, 'one-recording playlist starts a fresh source at its natural end');
+assert.equal(autoAudio.previewSrc.offset, 0, 'one-recording playlist restarts from beginning rather than the preview');
 autoMusic.setScreen('play');
 console.log('PASS automatic next recording in submenus, pause/seek safety and single-song looping without drawing controls');
 
@@ -269,7 +275,7 @@ console.log('PASS automatic next recording in submenus, pause/seek safety and si
 const orderAudio = new AudioEngine(); orderAudio.ctx = ctx; orderAudio.master = gain();
 orderAudio.decode = async () => ({ duration: 30 });
 const orderedEntries = [entry('order-c', 'C song', 1), entry('order-a-hard', 'A song', 5), entry('order-b', 'B song', 2), entry('order-a', 'A song', 1)];
-const orderApp = { settings: { previewVolume: .35 }, audio: orderAudio, serverOnline: false,
+const orderApp = { settings: { musicVolume: .35 }, audio: orderAudio, serverOnline: false,
   store: { listCharts: async () => orderedEntries, getChartBytes: async () => sampleBytes } };
 const orderMusic = new MenuMusic(orderApp);
 orderMusic.setScreen('menu'); await orderMusic.ensureStarted();
@@ -280,23 +286,23 @@ await orderMusic.next(); assert.equal(orderMusic.entry.id, 'order-a', 'manual ne
 orderMusic.setScreen('select'); const repeatingSource = orderAudio.previewSrc;
 for (const screen of ['select', 'settings', 'account', 'import', 'rankings']) {
   orderMusic.setScreen(screen); ctx.currentTime += 31; orderMusic.update();
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await waitMusic(orderMusic);
   assert.equal(orderMusic.entry.id, 'order-a', `${screen}: inherit selected-recording loop`);
   assert.equal(orderAudio.previewSrc, repeatingSource, `${screen}: loop does not replace source`);
 }
 orderMusic.setScreen('menu'); orderMusic.setScreen('settings');
-ctx.currentTime += 31; orderMusic.update(); await new Promise(resolve => setTimeout(resolve, 0));
+ctx.currentTime += 31; orderMusic.update(); await waitMusic(orderMusic);
 assert.equal(orderMusic.entry.id, 'order-b', 'submenu inherits menu playlist policy');
 orderMusic.setScreen('menu');
-ctx.currentTime += 31; orderMusic.update(); await new Promise(resolve => setTimeout(resolve, 0));
+ctx.currentTime += 31; orderMusic.update(); await waitMusic(orderMusic);
 assert.equal(orderMusic.entry.id, 'order-c', 'natural end advances in list order');
-ctx.currentTime += 31; orderMusic.update(); await new Promise(resolve => setTimeout(resolve, 0));
+ctx.currentTime += 31; orderMusic.update(); await waitMusic(orderMusic);
 assert.equal(orderMusic.entry.id, 'order-a', 'natural end wraps to first song');
 let finishOrderList;
 orderApp.store.listCharts = () => new Promise(resolve => { finishOrderList = resolve; });
 ctx.currentTime += 31; orderMusic.update();
 orderMusic.setScreen('select'); finishOrderList(orderedEntries);
-await new Promise(resolve => setTimeout(resolve, 0));
+await waitMusic(orderMusic);
 assert.equal(orderMusic.entry.id, 'order-a', 'late automatic playlist fetch cannot advance the selected song');
 orderMusic.setScreen('play');
 console.log('PASS ordered playlist wrap, selected-song repeat, inherited submenu policy and late auto-next cancellation');
@@ -307,7 +313,7 @@ const { createCanvas } = await import('@napi-rs/canvas');
 const { listPlaybackCharts } = await import('../src/api/library.ts');
 const switchAudio = new AudioEngine(); switchAudio.ctx = ctx; switchAudio.master = gain();
 switchAudio.decode = async () => ({ duration: 90 });
-const switchApp = { settings: { previewVolume: .35 }, centralLibrary: false, serverOnline: false,
+const switchApp = { settings: { musicVolume: .35 }, centralLibrary: false, serverOnline: false,
   audio: switchAudio, screen: { name: 'account' }, w: 1000, h: 700,
   store: { listCharts: async () => [], getChartBytes: async () => sampleBytes },
   server: { downloadChart: async () => sampleBytes },

@@ -9,7 +9,7 @@ import { PlaySession } from '../../engine/play.ts';
 import { DEFAULT_MODS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, PLAYFIELD_BOTTOM_GAP_MAX, type NFChart } from '../../core/types.ts';
 import { BUILTIN_SKINS } from '../../core/default-skin.ts';
 import { resolveSelectedSkin } from '../../core/skin-selection.ts';
-import { scrollSpeedMultiplier, scrollSpeedFromMultiplier, judgmentWindows } from '../../core/scoring.ts';
+import { scrollSpeedMultiplier, scrollSpeedFromMultiplier, judgmentWindows, scrollTimeMs } from '../../core/scoring.ts';
 
 type Tab = 'general' | 'gameplay' | 'audio' | 'video' | 'input' | 'skin' | 'about';
 const TABS: Tab[] = ['general', 'gameplay', 'audio', 'video', 'input', 'skin', 'about'];
@@ -72,7 +72,7 @@ export class SettingsScreen extends Screen {
   leave() { this.active = false; this.drag = null; this.previewToken++; this.calib?.cancel(); this.syncCalibrationDucking(); this.app.saveSettings(); }
   update() { if (document.hidden && this.calib?.state === 'running') this.calib.cancel(); this.calib?.update(); this.syncCalibrationDucking(); }
   private syncCalibrationDucking() { this.app.audio?.setPreviewDucking?.(this.calib && ['starting', 'running'].includes(this.calib.state) ? .08 : 1); }
-  private startCalib() { this.calib?.cancel(); this.calibrationApplied = false; this.calib = new TapCalibration(this.app.audio.ensure()); void this.calib.start(this.app.settings.sfxVolume); this.syncCalibrationDucking(); }
+  private startCalib() { this.calib?.cancel(); this.calibrationApplied = false; this.calib = new TapCalibration(this.app.audio.ensure(), this.app.audio.sfxGain!); void this.calib.start(1); this.syncCalibrationDucking(); }
   private async loadPreview() {
     const token = ++this.previewToken;
     try {
@@ -81,7 +81,9 @@ export class SettingsScreen extends Screen {
       const assets = (path: string) => files ? findCI(files, path) : undefined;
       const chart: NFChart = { format: 'neonfall-chart', version: 1, keys: this.keyMode, od: 8, offset: 0,
         meta: { title: '', artist: '', creator: '', version: '', audio: '', audioLeadIn: 0, previewTime: 0, lengthMs: 10000 }, timing: [{ t: 0, bpm: 120 }], sv: [], breaks: [],
-        notes: Array.from({ length: this.keyMode * 3 }, (_, i) => ({ col: i % this.keyMode, t: 1900 + Math.floor(i / this.keyMode) * 380 + i % this.keyMode * 70, ...(i === 2 ? { end: 2750 } : {}) })) };
+        notes: Array.from({ length: this.keyMode * 3 }, (_, i) => ({ col: i % this.keyMode, t: 1900 + Math.floor(i / this.keyMode) * 380 + i % this.keyMode * 70, ...(i === 2 ? { end: 2750 } : {}) }))
+          // Leave the long-note lane clear through its tail and cap margin.
+          .filter(note => note.col !== 2 || note.end !== undefined || note.t > 2750 + 120) };
       const session = new PlaySession(chart, {} as any, { skin, getAsset: assets }, { ...DEFAULT_MODS }, this.app.settings, { songTimeMs: () => 1700 + this.app.settings.audioOffset } as any);
       const renderer = new PlayfieldRenderer(skin, assets, this.app.settings, { ...DEFAULT_MODS });
       await Promise.all([...(skin?.columns ?? []).flatMap(c => [c.keyImg, c.keyImgD, c.noteImg, c.noteImgH, c.bodyImg, c.noteImgT]), ...Object.values(skin?.stage ?? {})].map(p => renderer.images.load(p)));
@@ -144,16 +146,20 @@ export class SettingsScreen extends Screen {
         }
         y += 76; note('Switch languages instantly.'); header('Visual feedback'); toggle('Particles', s.particles, 'particles', v => s.particles = v); toggle('Touch lane hints', s.touchHint, 'touchHint', v => s.touchHint = v); break;
       case 'gameplay':
-        header('Scroll & playfield'); slider('Scroll speed', scrollSpeedMultiplier(s.scrollSpeed), .5, 4, .05, v => v.toFixed(2) + '×', 'scroll', v => s.scrollSpeed = scrollSpeedFromMultiplier(v));
-        note('1× is the default reading speed. BPM and SV still apply unless Constant Speed is enabled.');
+        header('Scroll & playfield'); slider('Scroll speed', scrollSpeedMultiplier(s.scrollSpeed), 1, 40, .1, v => v.toFixed(1) + '×', 'scroll', v => s.scrollSpeed = scrollSpeedFromMultiplier(v));
+        note(tr('osu!mania scale · default 8.0× · reference travel {ms} ms', { ms: Math.round(scrollTimeMs(scrollSpeedMultiplier(s.scrollSpeed))) }));
+        note('Base speed is consistent across songs. BPM and SV changes still apply unless Constant Speed is enabled.');
         slider('Playfield scale', s.playfieldScale, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, .01, percent, 'scale', v => s.playfieldScale = v); note('Adjust from 50% to 200%. Tilted lanes stay within the screen.');
         fieldPosition('field-bottom-gap');
         header('Judgment'); note('Good hits restore health. Breaks let you recover.');
         note(tr('osu!mania ScoreV2 windows · OD {od}', { od: 8 }));
-        note(['PERFECT', 'GREAT', 'GOOD', 'OK', 'MEH'].map((name, i) => name + ' ±' + judgmentWindows(8)[i] + ' ms').join(' · '));
+        note(['MAX', '300', '200', '100', '50'].map((name, i) => name + ' ±' + judgmentWindows(8)[i] + ' ms').join(' · '));
         note('Release windows are 1.5× wider. A very late hit or release is a miss.'); break;
       case 'audio': {
-        header('Volumes'); slider('Music', s.musicVolume, 0, 1, .02, percent, 'music', v => s.musicVolume = v); slider('Hit sounds', s.sfxVolume, 0, 1, .02, percent, 'sfx', v => s.sfxVolume = v); slider('Preview', s.previewVolume, 0, 1, .02, percent, 'preview', v => s.previewVolume = v);
+        header('Volumes'); slider('Music', s.musicVolume, 0, 1, .02, percent, 'music', v => s.musicVolume = v);
+        note('One music volume for menus, previews and gameplay.');
+        slider('Sound effects', s.sfxVolume, 0, 1, .02, percent, 'sfx', v => s.sfxVolume = v);
+        note('Hit sounds, key feedback and interface sounds.');
         header('Timing & calibration'); slider('Audio offset', s.audioOffset, -250, 250, 1, v => Math.round(v) + ' ms', 'aoff', v => { s.audioOffset = v; s.audioOffsetAuto = false; });
         slider('Visual offset', s.visualOffset, -120, 120, 1, v => Math.round(v) + ' ms', 'voff', v => s.visualOffset = v); slider('Input offset', s.inputOffset, -120, 120, 1, v => Math.round(v) + ' ms', 'ioff', v => s.inputOffset = v);
         toggle('Automatic latency compensation', !!s.audioOffsetAuto, 'auto-offset', v => { s.audioOffsetAuto = v; if (v) s.audioOffset = Math.round(this.app.audio.baseLatencyMs); });

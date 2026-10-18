@@ -8,7 +8,7 @@ import { AudioEngine } from './audio.ts';
 import { InputManager } from './input.ts';
 import { StoryboardPlayer, storyboardUsesBackground } from '../core/storyboard.ts';
 import { computePP, computeStars } from '../core/rating.ts';
-import { SCORING_VERSION, accuracyFromCounts, gradeFromAccuracy, judgmentCount, judgmentForError, judgmentWindows, scoreFromCounts } from '../core/scoring.ts';
+import { SCORING_VERSION, accuracyFromCounts, gradeFromAccuracy, judgmentCount, judgmentForError, judgmentWindows, scoreFromCounts, mainBeatLength } from '../core/scoring.ts';
 import { clamp, bytesToBlobUrl, guessMime } from '../core/zip.ts';
 
 export type PlayPhase = 'loading' | 'playing' | 'paused' | 'failed' | 'finished';
@@ -60,6 +60,7 @@ export class PlaySession {
   timeMap: TimeMap;
   /** Visual-only map: constant speed leaves real BPM, audio and judgment clocks intact. */
   scrollMap: TimeMap;
+  scrollBeatLength: number;
   notes: NFChart['notes'] = [];
   windows: number[]; // head judgment windows at the chart OD
   tailWindows: number[];
@@ -83,6 +84,7 @@ export class PlaySession {
   private lastNoteEnd = 0;
   private playId = newPlayId();
   private failedAtMs: number | undefined;
+  private lastMissSoundAt = -Infinity;
 
   score = 0;
   combo = 0;
@@ -162,6 +164,7 @@ export class PlaySession {
 
     this.timeMap = buildTimeMap(chart.timing, chart.sv, chart.offset);
     this.scrollMap = mods.constantSpeed ? buildTimeMap([{ t: 0, bpm: 120 }], [], 0) : this.timeMap;
+    this.scrollBeatLength = mods.constantSpeed ? 500 : mainBeatLength(chart);
     this.input = new InputManager(this.keys, settings);
     this.input.now = () => this.chartTime();
     this.input.onPress = (p) => this.press(p.col, p.timeMs);
@@ -376,7 +379,7 @@ export class PlaySession {
     const t = rawTimeMs - this.settings.inputOffset;
     const i = this.nextNote(col);
     if (i < 0) {
-      this.audio.playSynth('tick', this.settings.sfxVolume * 0.25);
+      this.audio.playSynth('tick', 0.25);
       return;
     }
     const n = this.notes[i];
@@ -561,23 +564,28 @@ export class PlaySession {
     if (file) {
       const data = this.getAsset(file);
       if (data) {
-        this.audio.playFileOnce(data, file, { vol: this.settings.sfxVolume });
+        this.audio.playFileOnce(data, file, { vol: 1 });
         return;
       }
     }
-    this.audio.playSynth(kind as 'hit', this.settings.sfxVolume * 0.9);
+    this.audio.playSynth(kind as 'hit', 0.9);
   }
 
   private playMissSfx() {
+    const now = this.chartTime();
+    // A missed hold records head and tail separately. Chords can also miss in
+    // one frame; play one audible break without stacking identical samples.
+    if (now >= this.lastMissSoundAt && now - this.lastMissSoundAt < 35) return;
+    this.lastMissSoundAt = now;
     const file = this.skin?.misc?.combobreak;
     if (file) {
       const data = this.getAsset(file);
       if (data) {
-        this.audio.playFileOnce(data, file, { vol: this.settings.sfxVolume * 0.7 });
+        this.audio.playFileOnce(data, file, { vol: 0.7 });
         return;
       }
     }
-    this.audio.playSynth('clap', this.settings.sfxVolume * 0.25);
+    this.audio.playSynth('clap', 0.25);
   }
 
   // ---------- layout (512x384 osu-style space) ----------
@@ -676,6 +684,7 @@ export class PlaySession {
     this.score = 0;
     this.playId = newPlayId();
     this.failedAtMs = undefined;
+    this.lastMissSoundAt = -Infinity;
     this.combo = 0;
     this.maxCombo = 0;
     this.hp = 100;

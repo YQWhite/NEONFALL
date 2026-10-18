@@ -2,6 +2,7 @@ import type { NFSkin } from './types.ts';
 import { getBuiltinSkin, getDefaultSkin } from './default-skin.ts';
 import { readNFSK } from './nfm.ts';
 import { selectSkinForKeys } from './osk.ts';
+import { repairKnownLegacySkin } from './legacy-skin-repair.ts';
 
 /** Keep preview and gameplay on the same layout and its matching asset archive. */
 export async function resolveSelectedSkin(id: string, keys: number, readCustom: (id: string) => Promise<Uint8Array | null>) {
@@ -9,7 +10,7 @@ export async function resolveSelectedSkin(id: string, keys: number, readCustom: 
   if (!archive && id) {
     const bytes = await readCustom(id);
     if (bytes) {
-      try { archive = readNFSK(bytes); } catch { /* Invalid imported skin uses the default. */ }
+      try { archive = repairKnownLegacySkin(readNFSK(bytes)); } catch { /* Invalid imported skin uses the default. */ }
     }
   }
   let skin: NFSkin | null = selectSkinForKeys(archive?.skin, keys);

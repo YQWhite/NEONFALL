@@ -120,13 +120,15 @@ function click(screen, id) {
   const p = { x: c.x + c.w / 2, y: c.y + c.h / 2 };
   draw(screen, '', { ...p, down: true }); draw(screen, '', { ...p, down: false });
 }
-select.remoteBest = { ...ownScore, scoreVersion: 1, score: 5000000 }; select.infoTab = 'rankings'; select.detailScroll = 0;
+select.remoteBests.clear(); select.remoteBest = { ...ownScore, scoreVersion: 1, score: 5000000 }; select.infoTab = 'rankings'; select.detailScroll = 0;
 draw(select);
-check(renderedText.some(value => value.includes('PERSONAL BEST') && value.includes('LEGACY')), 'legacy label is rendered in the visible personal-best card while rankings tab is active');
+check(renderedText.includes('5,000,000') && renderedText.includes('LEGACY') && renderedText.includes('A'), 'legacy score, grade and version label are visible on the difficulty card while rankings tab is active');
 setLanguage('zh-CN');
 for (const [w, h] of [[568, 320], [780, 360], [1280, 800]]) {
   app.w = w; app.h = h; select.sel = 0; select.chartScores = serverRows; select.remoteBest = ownScore; select.chartStats = { ...store.getChartStats('chart-one'), failureBins: Array.from({ length: 40 }, (_, i) => i % 7 === 0 ? i + 1 : 0), failureSamples: 99 }; select.resize(); select.detailScroll = 0; select.infoTab = 'rankings';
-  draw(select, 'select-rankings'); bounded(['play', 'mods', 'download', 'export', 'chart-rankings', 'chart-details']);
+  draw(select, 'select-rankings'); bounded(['play', 'mods', 'chart-rankings', 'chart-details']);
+  if (h < 500) { click(select, 'chart-actions'); bounded(['download', 'export']); click(select, 'chart-actions'); }
+  else bounded(['download', 'export']);
   if (h < 500) {
     check(renderedText.includes(tr('SCORES')), 'mobile score tab caption is not ambiguously truncated');
     check(renderedText.includes(tr('DETAILS')), 'mobile details tab caption is not ambiguously truncated');

@@ -1,7 +1,8 @@
 // One owner for menu BGM and library preview; screen changes never create parallel players.
 import type { App } from './app.ts';
 import type { ChartEntry } from '../core/store.ts';
-import { readNFM } from '../core/nfm.ts';
+import { readNFMPreview } from '../core/preview-archive.ts';
+import type { NFMArchive } from '../core/nfm.ts';
 import { drawProgress, fillPanel, text } from './theme.ts';
 import { fmtTime } from '../core/zip.ts';
 import { listPlaybackCharts } from '../api/library.ts';
@@ -9,6 +10,8 @@ import { groupSongs, songKey } from './song-groups.ts';
 import type { NFTimingPoint, NFBreak } from '../core/types.ts';
 import { drawAvatar } from './avatar-art.ts';
 import { tr } from './i18n.ts';
+import { DEFAULT_MENU_EDGE_COLOR, extractMenuEdgeColor, mixMenuEdgeColors } from './menu-palette.ts';
+import type { MenuEdgeColor } from './menu-palette.ts';
 
 export interface MenuVisual {
   bands: Float32Array;
@@ -22,6 +25,7 @@ export interface MenuVisual {
   fountainSeed?: number;
   previewSection: boolean;
   reducedMotion?: boolean;
+  edgeColor?: MenuEdgeColor;
 }
 
 /** Authored effect markers take precedence; fallback sections last 30 seconds. */
@@ -60,9 +64,12 @@ export class MenuMusic {
   loading = false;
   error = '';
   background: HTMLImageElement | null = null;
+  backgroundChart: ChartEntry | null = null;
   private backgroundFrom: HTMLCanvasElement | null = null;
   private backgroundChangedAt = 0;
   private readonly backgroundFadeMs = 1000;
+  private edgeColorFrom: MenuEdgeColor = DEFAULT_MENU_EDGE_COLOR;
+  private edgeColorTo: MenuEdgeColor = DEFAULT_MENU_EDGE_COLOR;
   private timing: NFTimingPoint[] = [];
   private pulse = 0;
   private previousBass = 0;
@@ -70,8 +77,12 @@ export class MenuMusic {
   private enabled = false;
   private starting: Promise<void> | null = null;
   private observedLoops = 0;
-  private autoAdvancing = false;
+  private automaticAdvance: { revision: number; selectionGeneration?: number } | null = null;
+  private get autoAdvancing() { return this.automaticAdvance !== null; }
+  private nextRetryAt = 0;
+  private nextPreparation: { generation: number; ready: Promise<{ entry: ChartEntry; archive: NFMArchive } | null> } | null = null;
   private loopPolicy: 'playlist' | 'single' = 'playlist';
+  private playbackPolicyRevision = 0;
   private highlightRanges: NFBreak[] = [];
   private lastVisualTime = -1;
   private leftImpact = 0;
@@ -90,14 +101,36 @@ export class MenuMusic {
   private motionPreference: MediaQueryList | null = null;
   constructor(private app: App) {}
 
+  /** Last recording whose audio finished loading; entry may still be pending. */
+  get playingChart(): ChartEntry | null { return this.playingEntry; }
+
+  private cancelAutomaticAdvance() {
+    const task = this.automaticAdvance;
+    this.automaticAdvance = null;
+    this.nextRetryAt = 0;
+    if (task?.selectionGeneration === this.generation && this.loading) {
+      // Release both the automatic task and its loading state immediately.
+      // A slow cancelled fetch cannot block a later recording's natural end.
+      ++this.generation;
+      this.loading = false;
+      this.entry = this.playingEntry;
+    }
+  }
+
   /** Pre-game navigation shares one preview source, clock and user pause state. */
   setScreen(name: string) {
     // Returning from a submenu must not replay an entry which happened offscreen.
     this.resetFountainObservation();
     if (name === 'menu' || name === 'select') {
+      if (this.loopPolicy !== (name === 'menu' ? 'playlist' : 'single')) {
+        this.playbackPolicyRevision++;
+        this.cancelAutomaticAdvance();
+      }
       this.loopPolicy = name === 'menu' ? 'playlist' : 'single';
+      if (this.loopPolicy === 'single') this.nextPreparation = null;
       this.observedLoops = this.app.audio.previewLoopCount || 0;
     }
+    this.app.audio.setPreviewLooping?.(this.loopPolicy === 'single');
     this.setEnabled(name === 'menu' || name === 'select' || name === 'settings' || name === 'account' || name === 'import' || name === 'rankings');
   }
 
@@ -116,6 +149,8 @@ export class MenuMusic {
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
     if (!enabled) {
+      this.cancelAutomaticAdvance();
+      this.nextPreparation = null;
       ++this.generation;
       this.loading = false;
       this.starting = null;
@@ -127,12 +162,42 @@ export class MenuMusic {
   /** Keep the radio progressing even on submenus that do not draw its controls. */
   update() {
     if (!this.enabled) return;
+    if (this.automaticAdvance && this.automaticAdvance.revision !== this.app.audio.previewTimelineRevision) {
+      this.cancelAutomaticAdvance();
+    }
+    const remaining = this.app.audio.previewDurationSec - this.app.audio.previewTimeSec;
+    if (this.loopPolicy === 'playlist' && !this.loading && !this.nextPreparation && this.playingEntry
+      && this.app.audio.previewActive && remaining > 0 && remaining <= 8) this.prepareNext();
     const loops = this.app.audio.previewLoopCount || 0;
-    const finished = loops > this.observedLoops;
+    const finished = this.app.audio.previewEnded || loops > this.observedLoops;
     this.observedLoops = loops;
-    if (!finished || this.loopPolicy !== 'playlist' || this.loading || this.autoAdvancing || !this.app.audio.previewActive) return;
-    this.autoAdvancing = true;
-    void this.next(true).catch(() => undefined).finally(() => { this.autoAdvancing = false; });
+    if (!finished || this.loopPolicy !== 'playlist' || this.loading || this.autoAdvancing || !this.app.audio.previewActive || performance.now() < this.nextRetryAt) return;
+    const task = { revision: this.app.audio.previewTimelineRevision };
+    this.automaticAdvance = task;
+    void this.next(true).catch(() => undefined).finally(() => {
+      if (this.automaticAdvance !== task) return;
+      this.automaticAdvance = null;
+      this.nextRetryAt = this.enabled && this.loopPolicy === 'playlist' && this.app.audio.previewEnded ? performance.now() + 2000 : 0;
+    });
+  }
+
+  private prepareNext() {
+    const generation = this.generation;
+    const policy = this.playbackPolicyRevision;
+    const current = () => this.enabled && generation === this.generation && policy === this.playbackPolicyRevision && this.loopPolicy === 'playlist';
+    const ready = (async () => {
+      const songs = groupSongs(await this.list());
+      if (!current() || !songs.length) return null;
+      const index = songs.findIndex(song => song.key === songKey(this.playingEntry));
+      const entry = songs[(index + 1) % songs.length].charts[0];
+      const bytes = entry.server ? await this.app.server.downloadChart(entry.id, { persist: false }) : await this.app.store.getChartBytes(entry.id);
+      if (!current() || !bytes) return null;
+      const archive = await readNFMPreview(bytes), audio = archive.files.get(archive.chart.meta.audio);
+      if (!current() || !audio) return null;
+      await this.app.audio.decode(audio, entry.id);
+      return current() ? { entry, archive } : null;
+    })().catch(() => null);
+    this.nextPreparation = { generation, ready };
   }
 
   async ensureStarted(): Promise<void> {
@@ -158,6 +223,8 @@ export class MenuMusic {
 
   /** Keep audible audio while invalidating downloads tied to the old server. */
   connectionChanged() {
+    this.cancelAutomaticAdvance();
+    this.nextPreparation = null;
     ++this.generation;
     this.loading = false; this.starting = null;
     this.app.audio.cancelPreviewLoad?.();
@@ -168,36 +235,45 @@ export class MenuMusic {
     void this.ensureStarted();
   }
 
-  async select(entry: ChartEntry, fromStart = false): Promise<void> {
-    if (!this.enabled) return;
-    if (this.entry?.id === entry.id && !!this.entry.server === !!entry.server && (this.loading || this.app.audio.previewActive || this.app.audio.isPreviewPaused)) return;
-    if (!this.loading && this.entry && songKey(this.entry) === songKey(entry) && (this.app.audio.previewActive || this.app.audio.isPreviewPaused)) {
+  async select(entry: ChartEntry, fromStart = false, preparedArchive?: NFMArchive, canStart?: () => boolean): Promise<void> {
+    if (!this.enabled || canStart && !canStart()) return;
+    if (!canStart) this.cancelAutomaticAdvance();
+    if (!this.app.audio.previewEnded && this.entry?.id === entry.id && !!this.entry.server === !!entry.server && (this.loading || this.app.audio.previewActive || this.app.audio.isPreviewPaused)) return;
+    if (!this.app.audio.previewEnded && !this.loading && this.entry && songKey(this.entry) === songKey(entry) && (this.app.audio.previewActive || this.app.audio.isPreviewPaused)) {
       this.entry = entry; // selecting another difficulty keeps the recording and clock running
       this.playingEntry = entry;
       return;
     }
     const previousEntry = this.loading ? this.playingEntry : this.entry, previousTiming = this.timing;
     const token = ++this.generation;
+    if (canStart && this.automaticAdvance) this.automaticAdvance.selectionGeneration = token;
+    this.nextPreparation = null;
+    this.nextRetryAt = 0;
     this.entry = entry;
     this.loading = true;
     this.error = '';
+    let committed = false;
     // Invalidate old decodes, keeping the audible song until its replacement is ready.
     if (this.app.audio.cancelPreviewLoad) this.app.audio.cancelPreviewLoad();
     else this.app.audio.stopPreview();
     try {
-      const bytes = entry.server ? await this.app.server.downloadChart(entry.id) : await this.app.store.getChartBytes(entry.id);
-      if (token !== this.generation || !this.enabled) return;
-      if (!bytes) throw new Error('chart data not found');
-      const archive = readNFM(bytes);
+      const bytes = preparedArchive ? null : entry.server ? await this.app.server.downloadChart(entry.id, { persist: false }) : await this.app.store.getChartBytes(entry.id);
+      if (token !== this.generation || !this.enabled || canStart && !canStart()) return;
+      if (!bytes && !preparedArchive) throw new Error('chart data not found');
+      const archive = preparedArchive ?? await readNFMPreview(bytes!);
+      if (token !== this.generation || !this.enabled || canStart && !canStart()) return;
       const audio = archive.files.get(archive.chart.meta.audio);
       if (!audio) throw new Error('chart audio missing');
       const timing = archive.chart.timing.filter(point => Number.isFinite(point.t) && point.bpm > 0).sort((a, b) => a.t - b.t);
       const background = archive.chart.meta.bg ? archive.files.get(archive.chart.meta.bg) : undefined;
       const imageReady = this.loadBackground(background);
       this.app.audio.stopAmbient();
-      const started = await this.app.audio.previewMusic(audio, entry.id, fromStart ? 0 : Math.max(0, archive.chart.meta.previewTime), this.app.settings.previewVolume);
+      const started = await this.app.audio.previewMusic(audio, entry.id, fromStart ? 0 : Math.max(0, archive.chart.meta.previewTime), this.app.settings.musicVolume,
+        canStart ? () => token === this.generation && this.enabled && canStart() : undefined);
       if (token !== this.generation || !this.enabled) return;
+      if (started === false && canStart && !canStart()) return;
       if (started === false || !this.app.audio.previewActive) throw new Error('Could not decode audio');
+      committed = true;
       const highlightRanges = menuHighlightRanges(archive.chart, this.app.audio.previewDurationSec * 1000,
         () => this.app.audio.previewHighlightMs?.() ?? 0);
       this.timing = timing;
@@ -214,11 +290,16 @@ export class MenuMusic {
       this.lastEdgeEvent = '';
       this.pulse = this.previousBass = this.leftImpact = this.rightImpact = this.sectionBurst = 0;
       // Keep the previous artwork while network/audio/image decoding is in flight.
-      void imageReady.then(image => { if (token === this.generation && this.enabled) this.changeBackground(image); });
+      void imageReady.then(image => {
+        if (token === this.generation && this.enabled) { this.backgroundChart = entry; this.changeBackground(image); }
+      });
     } catch (e: any) {
       if (token === this.generation) { this.error = e?.message || String(e); this.entry = previousEntry; this.timing = previousTiming; }
     } finally {
-      if (token === this.generation) this.loading = false;
+      if (token === this.generation) {
+        this.loading = false;
+        if (canStart && !committed) { this.entry = previousEntry; this.timing = previousTiming; }
+      }
     }
   }
 
@@ -235,6 +316,7 @@ export class MenuMusic {
 
   private changeBackground(image: HTMLImageElement | null, now = performance.now()) {
     if (image === this.background) return;
+    const currentColor = this.backgroundEdgeColor(now);
     // Snapshot the visible blend so a second skip during a fade never flashes or jumps.
     if ((this.background || this.backgroundFrom) && typeof document !== 'undefined') {
       const frame = document.createElement('canvas');
@@ -244,7 +326,14 @@ export class MenuMusic {
       if (ctx) { this.drawBackgroundFrame(ctx, frame.width, frame.height, now); this.backgroundFrom = frame; }
     }
     this.background = image;
+    this.edgeColorFrom = currentColor;
+    this.edgeColorTo = extractMenuEdgeColor(image, this.app.w / this.app.h);
     this.backgroundChangedAt = now;
+  }
+
+  private backgroundEdgeColor(now: number): MenuEdgeColor {
+    const p = Math.max(0, Math.min(1, (now - this.backgroundChangedAt) / this.backgroundFadeMs));
+    return mixMenuEdgeColors(this.edgeColorFrom, this.edgeColorTo, p * p * (3 - 2 * p));
   }
 
   private drawBackgroundFrame(ctx: CanvasRenderingContext2D, w: number, h: number, now: number) {
@@ -282,16 +371,25 @@ export class MenuMusic {
 
   async next(automatic = false) {
     const token = this.generation;
+    const policy = this.playbackPolicyRevision, revision = this.app.audio.previewTimelineRevision;
+    const canStart = automatic ? () => this.enabled && policy === this.playbackPolicyRevision && this.loopPolicy === 'playlist'
+      && revision === this.app.audio.previewTimelineRevision && !this.app.audio.isPreviewPaused && this.app.audio.previewEnded !== false : undefined;
+    if (automatic && this.nextPreparation?.generation === token) {
+      const prepared = await this.nextPreparation.ready;
+      if (!this.enabled || token !== this.generation || canStart && !canStart()) return;
+      if (prepared) { await this.select(prepared.entry, true, prepared.archive, canStart); return; }
+    }
     const entries = await this.list().catch(() => []);
-    if (!this.enabled || token !== this.generation || (automatic && this.loopPolicy !== 'playlist')) return;
+    if (!this.enabled || token !== this.generation || canStart && !canStart()) return;
     const songs = groupSongs(entries);
     const current = songs.findIndex(song => song.key === songKey(this.entry ?? this.playingEntry));
-    if (songs.length > 1 || (songs.length && current < 0)) await this.select(songs[(current + 1) % songs.length].charts[0], true);
-    // A library containing one recording keeps playing instead of restarting it.
+    if (songs.length > 1 || (songs.length && (current < 0 || automatic && this.app.audio.previewEnded))) await this.select(songs[(current + 1) % songs.length].charts[0], true, undefined, canStart);
+    // A manual skip in a one-recording library keeps its current position.
   }
 
   /** Beat phase follows the audio clock (including pause/seek), with real bass transients. */
-  visualizer(dt: number): MenuVisual {
+  visualizer(dt: number, now = performance.now()): MenuVisual {
+    const edgeColor = this.backgroundEdgeColor(now);
     const sample = this.app.audio.samplePreviewSpectrum?.() ?? { bands: new Float32Array(17), bass: 0, energy: 0 };
     const audio = this.app.audio;
     const timeMs = audio.previewTimeSec * 1000;
@@ -311,14 +409,14 @@ export class MenuMusic {
       : this.lastVisualTime >= 0 && (advanced < 0 || advanced > Math.max(120, elapsed * 2 + 50));
     const loops = audio.previewLoopCount || 0;
     const looped = tracksTransport && !jumped && loops > this.lastVisualLoops;
-    const playbackEnabled = audio.previewActive && audio.ctx?.state === 'running' && (this.app.settings?.previewVolume ?? 1) > 0;
+    const playbackEnabled = audio.previewActive && audio.ctx?.state === 'running' && (this.app.settings?.musicVolume ?? 1) > 0;
     // settings.particles controls gameplay hit particles, not menu fountains.
     const fountainEnabled = playbackEnabled && !reducedMotion;
     // A fresh preview can be waiting for the browser's first user gesture.
     // Its frozen start is not an already-played entry; preserve only that
     // pending entry, never a fountain suspended later during playback.
     const waitingForUnlock = this.awaitingPreviewUnlock && audio.ctx?.state === 'suspended' && audio.previewActive
-      && (this.app.settings?.previewVolume ?? 1) > 0 && !reducedMotion;
+      && (this.app.settings?.musicVolume ?? 1) > 0 && !reducedMotion;
     if ((!fountainEnabled && !waitingForUnlock) || jumped) {
       this.pendingFountainStart = null;
       this.fountainStartedAt = -1;
@@ -346,7 +444,7 @@ export class MenuMusic {
       // fountain keeps its original age across short gaps and never restarts.
       this.lastEdgeEvent = '';
       return { bands: this.silentBands, pulse: 0, energy: 0, position: audio.previewTimeSec || 0,
-        leftImpact: 0, rightImpact: 0, sectionBurst: 0, fountainAgeMs: -1, fountainSeed: this.fountainSeed, previewSection: false, reducedMotion };
+        leftImpact: 0, rightImpact: 0, sectionBurst: 0, fountainAgeMs: -1, fountainSeed: this.fountainSeed, previewSection: false, reducedMotion, edgeColor };
     }
     const beatMs = point ? 60000 / point.bpm : 500;
     const beatIndex = point ? Math.floor((timeMs - point.t) / beatMs) : 0;
@@ -385,7 +483,7 @@ export class MenuMusic {
     let fountainAgeMs = this.fountainStartedAt < 0 ? -1 : timeMs - this.fountainStartedAt;
     if (fountainAgeMs < 0 || fountainAgeMs >= 1800) { this.fountainStartedAt = -1; fountainAgeMs = -1; }
     return { bands: sample.bands, pulse: this.pulse, energy: sample.energy, position: audio.previewTimeSec || 0,
-      leftImpact: this.leftImpact, rightImpact: this.rightImpact, sectionBurst: 0, fountainAgeMs, fountainSeed: this.fountainSeed, previewSection, reducedMotion };
+      leftImpact: this.leftImpact, rightImpact: this.rightImpact, sectionBurst: 0, fountainAgeMs, fountainSeed: this.fountainSeed, previewSection, reducedMotion, edgeColor };
   }
 
   draw(ctx: CanvasRenderingContext2D) {

@@ -66,7 +66,7 @@ export class App {
   serverOnline = false;
   toastMsg = '';
   toastT0 = 0;
-  version = '0.2.9';
+  version = '0.2.10';
   time = 0;
   testMode = false;
   platform: 'web' | 'desktop' | 'android' = 'web';
@@ -425,7 +425,6 @@ export class App {
     this.displayMode?.refresh();
     this.store.saveSettings();
     this.audio.applySettings(this.settings);
-    this.audio.setPreviewVolume(this.settings.previewVolume);
   }
 
   async pingServer(): Promise<boolean> {

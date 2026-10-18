@@ -88,6 +88,7 @@ export interface NFSkin {
   columns: NFSkinColumn[];
   stage?: { left?: string; right?: string; bottom?: string; light?: string; hint?: string; warning?: string };
   judgments?: { perfect?: string; great?: string; good?: string; ok?: string; bad?: string; miss?: string };
+  judgmentAnimations?: Partial<Record<'perfect' | 'great' | 'good' | 'ok' | 'bad' | 'miss', { frames: string[]; fps: number }>>;
   hitsounds?: {
     normal?: { hit?: string; whistle?: string; finish?: string; clap?: string };
     soft?: { hit?: string; whistle?: string; finish?: string; clap?: string };
@@ -145,7 +146,9 @@ export interface Settings {
   /** Explicit disconnect persists until the player connects again. */
   serverDisconnected?: boolean;
   scrollSpeed: number; audioOffset: number; visualOffset: number; inputOffset: number;
-  musicVolume: number; sfxVolume: number; previewVolume: number; fpsCap: number; resScale: number;
+  musicVolume: number; sfxVolume: number;
+  /** Legacy import only; musicVolume now controls both preview and gameplay. */
+  previewVolume?: number; fpsCap: number; resScale: number;
   sbEnabled: boolean; sbQuality: number; storyboardBrightness: number; videoBg: boolean; bgDim: number; particles: boolean; touchHint: boolean;
   keybinds: Record<string, string[]>; serverUrl: string; lastUsername: string; skinId: string; audioOffsetAuto?: boolean;
 }
@@ -155,8 +158,8 @@ export const PLAYFIELD_BOTTOM_GAP_MAX = .4;
 export const DEFAULT_SETTINGS: Settings = {
   language: 'zh-CN',
   playfieldScale: 1.08,
-  scrollSpeed: 0.55, audioOffset: 0, visualOffset: 0, inputOffset: 0,
-  musicVolume: 0.9, sfxVolume: 0.7, previewVolume: 0.35, fpsCap: 0, resScale: 1,
+  scrollSpeed: 402 * 8 / 11485, audioOffset: 0, visualOffset: 0, inputOffset: 0,
+  musicVolume: 0.9, sfxVolume: 0.7, fpsCap: 0, resScale: 1,
   sbEnabled: true, sbQuality: 0.75, storyboardBrightness: 1, videoBg: true, bgDim: 0.35, particles: true, touchHint: true,
   keybinds: {
     '4': ['KeyD', 'KeyF', 'KeyJ', 'KeyK'],

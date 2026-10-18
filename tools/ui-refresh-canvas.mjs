@@ -100,6 +100,7 @@ for (const lang of ['zh-CN', 'en']) {
     app.account.user = null; const account = new screens.account(app); account.enter(); draw(account, 'account-create'); account.scroll = account.maxScroll; draw(account, 'account-connect'); account.leave();
     app.account.user = profile; const signed = new screens.account(app); signed.enter(); await signed.loadMyPlays(); draw(signed, 'account-profile'); signed.leave();
     const summary = new screens.result(app); summary.enter({ result, entry: track.entry, rating: 1502.4, gradeImage: play.renderer.images.get(parsedSkin.skin.grades.S) }); draw(summary, 'result');
+    for (const label of ['MAX','300','200','100','50','MISS']) assert.ok(textCalls.includes(label), 'native mania result grade: '+label);
     play.sess.phase = 'playing'; currentTime = 30000; draw(play, 'play-skin');
     assert.equal(controls.some(c => c.id === 'pbtn'), false, 'desktop must have no pause button');
     assert.ok(!textCalls.some(t => /^\d+:\d\d$/.test(t)), 'play HUD contains no time labels');
@@ -132,6 +133,7 @@ await download.downloadSelected();
 assert.equal(savedDownloads.length, 1); assert.equal(download.entry().downloaded, true);
 assert.deepEqual(savedDownloads[0].bytes, charts.find(c => c.entry.id === selectedId).bytes, 'download button persists the selected server chart');
 app.platform = 'android'; app.w = 780; app.h = 360; draw(download, 'server-library-downloaded');
+click(download, 'chart-actions'); draw(download);
 assert.ok(textCalls.includes(tr('DOWNLOADED')), 'native library shows offline availability');
 download.leave(); app.platform = 'desktop'; app.w = 1280; app.h = 800;
 for (const key of Object.keys(zh)) { setLanguage('en'); assert.equal(tr(key), key); setLanguage('zh-CN'); assert.equal(tr(key), zh[key]); }

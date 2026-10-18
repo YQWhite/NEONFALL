@@ -2,10 +2,11 @@
 import type { Settings, PlayResult, UserInfo } from './types.ts';
 import { DEFAULT_SETTINGS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, PLAYFIELD_BOTTOM_GAP_MAX } from './types.ts';
 import { sha1Hex, bytesToBase64, base64ToBytes, deepClone } from './zip.ts';
-import { readNFM, readNFSK, type NFMArchive } from './nfm.ts';
+import { readNFM, readNFMMetadata, readNFSK, type NFMArchive } from './nfm.ts';
 import { idbPut, idbGet, idbDel, idbKeys, idbAll } from './idb.ts';
 import { computeRating, isRankedResult, resultPP } from './rating.ts';
 import { repairBundledStoryboard } from './storyboard-repair.ts';
+import { scrollSpeedFromMultiplier } from './scoring.ts';
 
 export interface DesktopBridge {
   isDesktop: boolean;
@@ -118,6 +119,11 @@ export class Store {
     this.settings.playfieldBottomGap = Number.isFinite(s?.playfieldBottomGap) ? Math.max(0, Math.min(PLAYFIELD_BOTTOM_GAP_MAX, s.playfieldBottomGap)) : undefined;
     this.settings.storyboardBrightness = Number.isFinite(s?.storyboardBrightness) ? Math.max(0, Math.min(1, s.storyboardBrightness)) : 1;
     this.settings.bgDim = Number.isFinite(s?.bgDim) ? Math.max(0, Math.min(1, s.bgDim)) : DEFAULT_SETTINGS.bgDim;
+    const oldMusic = Number.isFinite(s?.musicVolume) ? s.musicVolume : s?.previewVolume;
+    this.settings.musicVolume = Number.isFinite(oldMusic) ? Math.max(0, Math.min(1, oldMusic)) : DEFAULT_SETTINGS.musicVolume;
+    this.settings.sfxVolume = Number.isFinite(s?.sfxVolume) ? Math.max(0, Math.min(1, s.sfxVolume)) : DEFAULT_SETTINGS.sfxVolume;
+    delete this.settings.previewVolume;
+    this.settings.scrollSpeed = Number.isFinite(s?.scrollSpeed) ? Math.max(scrollSpeedFromMultiplier(1), Math.min(scrollSpeedFromMultiplier(40), s.scrollSpeed)) : DEFAULT_SETTINGS.scrollSpeed;
     // fold device latency hint into audioOffset on first run
     if (typeof s?.audioOffsetAuto !== 'boolean') {
       this.settings.audioOffsetAuto = true;
@@ -237,8 +243,7 @@ export class Store {
     } else {
       await idbPut('charts', id, { bytes: bytesToBase64(bytes), name });
     }
-    const archive = await readNFM(bytes);
-    const c = archive.chart;
+    const c = readNFMMetadata(bytes);
     const entry: ChartEntry = {
       id,
       name,

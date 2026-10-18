@@ -3,6 +3,7 @@ import { Screen } from '../app.ts';
 import { THEME, text, neonText, fillPanel, drawProgress, paragraph } from '../theme.ts';
 import { tr } from '../i18n.ts';
 import { skinBounds } from '../skin-art.ts';
+import { drawSkinHealth, prepareSkinHealth } from '../skin-health.ts';
 import { readNFM, type NFMArchive } from '../../core/nfm.ts';
 import { PlaySession } from '../../engine/play.ts';
 import { PlayfieldRenderer } from '../../engine/render.ts';
@@ -108,7 +109,8 @@ export class PlayScreen extends Screen {
       if (!current()) return;
       // Transparent HUD/grade bounds require a one-time pixel read. Do that
       // while loading, before the first timed gameplay frame.
-      for (const path of new Set([...Object.values(effectiveSkin?.hud ?? {}), ...Object.values(effectiveSkin?.grades ?? {}), ...Object.values(effectiveSkin?.judgments ?? {})])) {
+      prepareSkinHealth(effectiveSkin, this.renderer.images);
+      for (const path of new Set([...Object.values(effectiveSkin?.grades ?? {}), ...Object.values(effectiveSkin?.judgments ?? {})])) {
         const image = this.renderer.images.get(path);
         if (image) skinBounds(image);
       }
@@ -120,11 +122,11 @@ export class PlayScreen extends Screen {
         if (s) sfxPaths.push(s.hit, s.whistle, s.finish, s.clap);
       }
       if (effectiveSkin?.misc?.combobreak) sfxPaths.push(effectiveSkin.misc.combobreak);
-      for (const p of sfxPaths) {
-        if (!p) continue;
+      await Promise.allSettled([...new Set(sfxPaths.filter((p): p is string => !!p))].map(p => {
         const data = getAsset(p);
-        if (data) this.app.audio.decode(data, p).catch(() => undefined);
-      }
+        return data ? this.app.audio.decode(data, p) : Promise.resolve();
+      }));
+      if (!current()) return;
       this.statusPct = 0.95;
 
       // storyboard canvas
@@ -368,34 +370,21 @@ export class PlayScreen extends Screen {
   private drawHUD(ctx: CanvasRenderingContext2D, s: PlaySession) {
     const { w, h } = this.app, compact = w < 800;
     const margin = compact ? 18 : 28, hpw = Math.min(230, w * .29);
-    // The active skin owns the health artwork. Empty skins use the shared theme.
-    text(ctx, 'HEALTH', margin, 23, { size: 9, color: '#aebfb4', spacing: '1.5px', shadow: true });
-    const fill = this.renderer?.images.get(s.skin?.hud?.healthFill);
-    const bg = this.renderer?.images.get(s.skin?.hud?.healthBackground);
-    const marker = this.renderer?.images.get(s.skin?.hud?.healthMarker);
     const hp = Math.max(0, Math.min(1, s.hp / 100));
-    const hpHeight = fill ? Math.min(22, hpw * skinBounds(fill).h / skinBounds(fill).w) : 7;
-    fillPanel(ctx, margin, 32, hpw, hpHeight, { r: 3, fill: 'rgba(4,10,15,.8)', line: 'rgba(255,255,255,.14)' });
-    if (bg) {
-      const b = skinBounds(bg);
-      // Some scorebar-bg files decorate the entire screen; only compact art fits here.
-      if (b.w / b.h < 12) ctx.drawImage(bg, b.x, b.y, b.w, b.h, margin, 32, hpw, hpHeight);
-    }
-    if (fill && hp > 0) {
-      const b = skinBounds(fill);
-      ctx.drawImage(fill, b.x, b.y, b.w * hp, b.h, margin, 32, hpw * hp, hpHeight);
-    } else if (!fill) {
+    // A provided (even transparent) scorebar owns this HUD area completely.
+    // The default panel is used only when the skin has no loaded health art.
+    const skinTitleY = drawSkinHealth(ctx, s.skin, this.renderer?.images, hp, w, h);
+    if (skinTitleY === null) {
+      text(ctx, 'HEALTH', margin, 23, { size: 9, color: '#aebfb4', spacing: '1.5px', shadow: true });
+      fillPanel(ctx, margin, 32, hpw, 7, { r: 3, fill: 'rgba(4,10,15,.8)', line: 'rgba(255,255,255,.14)' });
       ctx.fillStyle = hp > .4 ? THEME.green : hp > .2 ? THEME.orange : THEME.red;
-      ctx.fillRect(margin, 32, hpw * hp, hpHeight);
+      ctx.fillRect(margin, 32, hpw * hp, 7);
     }
-    if (marker) {
-      const b = skinBounds(marker), mh = Math.max(12, hpHeight + 5), mw = mh * b.w / b.h;
-      ctx.drawImage(marker, b.x, b.y, b.w, b.h, margin + hpw * hp - mw / 2, 32 - (mh - hpHeight) / 2, mw, mh);
-    }
+    const titleY = skinTitleY ?? 73;
     if (this.entry) {
-      text(ctx, this.entry.title, margin, 73, { size: 12, color: '#d1dbd5', maxWidth: w * .32, shadow: true, translate: false });
-      text(ctx, `${this.entry.version} · ${this.entry.keys}K`, margin, 92, { size: 10, color: THEME.dim, maxWidth: w * .32, translate: false });
-      if (s.modsUsed().length) text(ctx, s.modsUsed().map(m => tr(m.toUpperCase())).join(' · '), margin, 110, { size: 10, color: THEME.accent2, maxWidth: w * .32 });
+      text(ctx, this.entry.title, margin, titleY, { size: 12, color: '#d1dbd5', maxWidth: w * .32, shadow: true, translate: false });
+      text(ctx, `${this.entry.version} · ${this.entry.keys}K`, margin, titleY + 19, { size: 10, color: THEME.dim, maxWidth: w * .32, translate: false });
+      if (s.modsUsed().length) text(ctx, s.modsUsed().map(m => tr(m.toUpperCase())).join(' · '), margin, titleY + 37, { size: 10, color: THEME.accent2, maxWidth: w * .32 });
     }
     text(ctx, s.score.toLocaleString(), w - margin, 38, { size: compact ? 26 : 32, color: '#ffffff', align: 'right', weight: 600, shadow: true });
     text(ctx, (s.accuracy() * 100).toFixed(2) + '%', w - margin, 62, { size: 14, color: THEME.accent, align: 'right', shadow: true });
@@ -438,27 +427,33 @@ export class PlayScreen extends Screen {
 
   private drawPause(ctx: CanvasRenderingContext2D) {
     const { w, h } = this.app, s = this.app.settings;
-    const pw = Math.min(680, w - 40), ph = Math.min(410, h - 32), px = (w - pw) / 2, py = (h - ph) / 2;
-    const short = ph < 390;
+    const pw = Math.min(720, w - 32), ph = Math.min(450, h - 24), px = (w - pw) / 2, py = (h - ph) / 2;
+    const short = ph < 360, pad = short ? 20 : 28, gap = 24, half = (pw - pad * 2 - gap) / 2;
     fillPanel(ctx, px, py, pw, ph, { r: 22, fill: 'rgba(18,28,35,.98)', line: '#3b5148' });
-    text(ctx, 'PAUSED', px + 28, py + 45, { size: 30, weight: 600 });
-    text(ctx, 'Take a breath. Find the beat.', px + 30, py + 70, { size: 12, color: THEME.dim });
-    const by = py + (short ? 98 : 116), half = (pw - 72) / 2;
-    const brightness = this.app.ui.slider('pause-bgdim', px + 28, by + 24, half, 24, 1 - s.bgDim, 0, 1, .01);
-    const dim = 1 - brightness;
-    const speedMultiplier = this.app.ui.slider('pause-speed', px + 44 + half, by + 24, half, 24, scrollSpeedMultiplier(s.scrollSpeed), .5, 4, .05);
-    const speed = scrollSpeedFromMultiplier(speedMultiplier);
-    text(ctx, 'Background brightness', px + 28, by + 10, { size: 12, color: THEME.dim });
-    text(ctx, Math.round(brightness * 100) + '%', px + 28 + half, by + 10, { size: 12, align: 'right', color: THEME.accent });
-    text(ctx, 'Scroll speed', px + 44 + half, by + 10, { size: 12, color: THEME.dim });
-    text(ctx, speedMultiplier.toFixed(2) + '×', px + pw - 28, by + 10, { size: 12, align: 'right', color: THEME.accent });
-    if (dim !== s.bgDim || speed !== s.scrollSpeed) { s.bgDim = dim; s.scrollSpeed = speed; this.app.saveSettings(); }
-    const resumeY = by + 78;
-    if (this.app.ui.button('p-resume', px + 28, resumeY, pw - 56, 48, 'RESUME', { accent: true })) this.sess?.resume();
-    text(ctx, 'Music rewinds 3 seconds. Your hits are kept.', px + pw / 2, resumeY + 69, { size: 11, align: 'center', color: THEME.dim, maxWidth: pw - 56 });
-    if (this.app.ui.button('p-retry', px + 28, resumeY + 88, half, 40, 'RETRY')) this.sess?.retry();
-    if (this.app.ui.button('p-quit', px + 44 + half, resumeY + 88, half, 40, 'QUIT TO SELECT')) { this.sess?.quit(); this.app.gotoScreen('select'); }
-    if (!this.app.isTouch) text(ctx, 'ESC resume · R retry · Q quit', px + pw / 2, py + ph - 16, { size: 10, align: 'center', color: THEME.dim });
+    text(ctx, 'PAUSED', px + pad, py + (short ? 32 : 42), { size: short ? 24 : 30, weight: 600 });
+    if (!short) text(ctx, 'Take a breath. Find the beat.', px + pad, py + 65, { size: 12, color: THEME.dim });
+    const by = py + (short ? 53 : 86), rowH = short ? 52 : 64;
+    const control = (id: string, label: string, col: number, row: number, value: number, min = 0, max = 1, step = .01, speed = false) => {
+      const x = px + pad + col * (half + gap), y = by + row * rowH;
+      const next = this.app.ui.slider(id, x, y + 21, half, 22, value, min, max, step);
+      text(ctx, label, x, y + 9, { size: 12, color: THEME.dim, maxWidth: half - 58 });
+      text(ctx, speed ? next.toFixed(1) + '×' : Math.round(next * 100) + '%', x + half, y + 9, { size: 12, align: 'right', color: THEME.accent });
+      return next;
+    };
+    const dim = 1 - control('pause-bgdim', 'Background brightness', 0, 0, 1 - s.bgDim);
+    const storyboard = control('pause-sb-brightness', 'Storyboard brightness', 1, 0, s.storyboardBrightness);
+    const music = control('pause-music', 'Music', 0, 1, s.musicVolume);
+    const effects = control('pause-sfx', 'Sound effects', 1, 1, s.sfxVolume);
+    const speed = scrollSpeedFromMultiplier(control('pause-speed', 'Scroll speed', 0, 2, scrollSpeedMultiplier(s.scrollSpeed), 1, 40, .1, true));
+    paragraph(ctx, 'Music rewinds 3 seconds. Your hits are kept.', px + pad + half + gap, by + rowH * 2 + 8, half, { size: 11, color: THEME.dim });
+    if (Math.abs(dim - s.bgDim) > .000001 || Math.abs(speed - s.scrollSpeed) > .000001 || storyboard !== s.storyboardBrightness || music !== s.musicVolume || effects !== s.sfxVolume) {
+      s.bgDim = dim; s.scrollSpeed = speed; s.storyboardBrightness = storyboard; s.musicVolume = music; s.sfxVolume = effects; this.app.saveSettings();
+    }
+    const actionY = py + ph - (short ? 58 : 72), actionH = short ? 36 : 44, buttonGap = 8, buttonW = (pw - pad * 2 - buttonGap * 2) / 3;
+    if (this.app.ui.button('p-resume', px + pad, actionY, buttonW, actionH, 'RESUME', { accent: true })) this.sess?.resume();
+    if (this.app.ui.button('p-retry', px + pad + buttonW + buttonGap, actionY, buttonW, actionH, 'RETRY')) this.sess?.retry();
+    if (this.app.ui.button('p-quit', px + pad + (buttonW + buttonGap) * 2, actionY, buttonW, actionH, 'QUIT TO SELECT')) { this.sess?.quit(); this.app.gotoScreen('select'); }
+    if (!this.app.isTouch) text(ctx, 'ESC resume · R retry · Q quit', px + pw / 2, py + ph - 10, { size: 10, align: 'center', color: THEME.dim });
   }
 
   private drawFail(ctx: CanvasRenderingContext2D) {
