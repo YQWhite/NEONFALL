@@ -113,7 +113,8 @@ for (const t of times) {
   near(judgedFixed.session.chartTime(), judgedNormal.session.chartTime(), 'Mod does not accelerate or seek audio');
 }
 const fixedResult = judgedFixed.session.buildResult(), normalResult = judgedNormal.session.buildResult();
-check(fixedResult.passed && fixedResult.acc > .98 && fixedResult.pp > 0, 'Real mixed tap/hold play remains ranked and earns PP');
+near(fixedResult.acc, (5 * 305 + 300 + 200) / (7 * 305), 'Accuracy includes seven head/tail judgments without body-tick inflation');
+check(fixedResult.passed && fixedResult.acc > .9 && fixedResult.pp > 0, 'Real mixed tap/hold play remains ranked and earns PP');
 for (const key of ['score', 'acc', 'maxCombo', 'counts', 'durationMs']) eq(fixedResult[key], normalResult[key], `Constant Speed preserves raw ${key}`);
 eq(fixedResult.mods, ['ConstantSpeed'], 'Result records the enabled mod');
 eq(fixedResult.pp, computePP(fixedResult.stars, fixedResult.acc, fixedResult.durationMs, ['ConstantSpeed']), 'buildResult applies the Constant Speed factor');

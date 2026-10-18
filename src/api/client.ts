@@ -12,6 +12,18 @@ interface ChartCache {
   deleteChart(id: string): Promise<unknown>;
 }
 
+export interface ServerAnnouncement { title: string; body: string; updatedAt?: string; }
+export type LeaderboardMetric = 'rating' | 'bestPp' | 'totalScore' | 'accuracy' | 'clears';
+export interface GlobalLeaderboardEntry {
+  rank: number; username: string; nickname: string; avatar?: string;
+  rating: number; bestPp: number; totalScore: number; accuracy: number; clears: number;
+}
+export interface ChartStatistics {
+  chartId: string; keys: number; attempts: number; passes: number; passRate: number | null;
+  failureBins: number[]; failureSamples: number;
+  personalBest?: LeaderboardEntry | null;
+}
+
 export function normalizeServerUrl(value: string): string {
   const input = value.trim().replace(/\/+$/, '');
   if (!input) return '';
@@ -34,6 +46,11 @@ export class ServerApi {
   uploadsEnabled = true;
   avatarsEnabled = false;
   ratingVersion = 0;
+  scoreVersion = 0;
+  statisticsVersion = 0;
+  metadataLoaded = false;
+  serverVersion = '';
+  announcement: ServerAnnouncement | null = null;
 
   constructor(base = '', private cache?: ChartCache, private timeoutMs = 15000) {
     this.base = normalizeServerUrl(base);
@@ -94,11 +111,20 @@ export class ServerApi {
       this.uploadsEnabled = body?.uploadPolicy !== 'disabled';
       this.avatarsEnabled = body?.avatars === true;
       this.ratingVersion = ok && Number.isInteger(body?.ratingVersion) && body.ratingVersion >= 0 ? body.ratingVersion : 0;
+      this.scoreVersion = ok && Number.isInteger(body?.scoreVersion) && body.scoreVersion >= 0 ? body.scoreVersion : 0;
+      this.statisticsVersion = ok && Number.isInteger(body?.statisticsVersion) && body.statisticsVersion >= 0 ? body.statisticsVersion : 0;
+      this.serverVersion = ok && typeof body?.version === 'string' ? body.version.slice(0, 80) : '';
+      const announcement = body?.announcement;
+      this.announcement = ok && announcement && typeof announcement.title === 'string' && typeof announcement.body === 'string'
+        ? { title: announcement.title.slice(0, 120), body: announcement.body.slice(0, 8000), ...(typeof announcement.updatedAt === 'string' ? { updatedAt: announcement.updatedAt.slice(0, 80) } : {}) } : null;
       this.online = ok;
+      if (ok) this.metadataLoaded = true;
       return ok;
     } catch {
       this.online = false;
       this.ratingVersion = 0;
+      this.scoreVersion = 0;
+      this.statisticsVersion = 0;
       return false;
     }
   }
@@ -223,14 +249,17 @@ export class ServerApi {
 
   // ---------- scores ----------
   async submitScore(play: PlayResult): Promise<{ ok: boolean; rating: number; rank?: number; ranked?: boolean }> {
-    if (play.mods.some(mod => /^constantspeed$/i.test(mod)) && this.ratingVersion < 3) {
+    const needsNewScore = play.scoreVersion === 2 || play.mods.some(mod => /^notail$/i.test(mod));
+    const requiredRating = play.mods.some(mod => /^notail$/i.test(mod)) ? 4 : play.mods.some(mod => /^constantspeed$/i.test(mod)) ? 3 : 0;
+    if (needsNewScore && this.scoreVersion < 2 || this.ratingVersion < requiredRating) {
       const token = this.token, base = this.base;
       // Older servers silently recompute unknown mods at full pp. Keep this
       // score local until the host advertises the matching conversion policy.
       const online = await this.ping();
       if (this.token !== token || this.base !== base) throw new Error('Score submission cancelled because the connection changed.');
       if (!online) throw new Error('Could not check the server rating version.');
-      if (this.ratingVersion < 3) throw new ApiError('Server update required for Constant Speed scores.', 426);
+      if (needsNewScore && this.scoreVersion < 2) throw new ApiError('Server update required for normalized scores. The result stays queued locally.', 426);
+      if (this.ratingVersion < requiredRating) throw new ApiError('Server update required for this mod rating policy. The result stays queued locally.', 426);
     }
     return (await this.req('/api/scores', {
       method: 'POST',
@@ -239,15 +268,28 @@ export class ServerApi {
     })) as { ok: boolean; rating: number; rank?: number; ranked?: boolean };
   }
 
-  async scores(chartId: string, keys: number): Promise<LeaderboardEntry[]> {
-    return (await this.req(`/api/scores?chart=${encodeURIComponent(chartId)}&keys=${keys}`)) as LeaderboardEntry[];
+  async scores(chartId: string, keys: number, scoreVersion: 1 | 2 = 2): Promise<LeaderboardEntry[]> {
+    const rows = await this.req(`/api/scores?chart=${encodeURIComponent(chartId)}&keys=${keys}&scoreVersion=${scoreVersion}`);
+    // Old servers ignore the filter. Never mix unbounded historical scores into
+    // the million-point table, even while other server features stay usable.
+    return Array.isArray(rows) ? rows.filter(row => scoreVersion === 2 ? row?.scoreVersion === 2 : row?.scoreVersion !== 2) : [];
   }
 
   async myScores(): Promise<PlayResult[]> {
     return (await this.req('/api/scores/mine')) as PlayResult[];
   }
 
-  async leaderboard(): Promise<{ username: string; nickname: string; rating: number; bestPp: number }[]> {
-    return (await this.req('/api/leaderboard')) as { username: string; nickname: string; rating: number; bestPp: number }[];
+  async chartStats(chartId: string, keys: number): Promise<ChartStatistics> {
+    return this.req(`/api/chart-stats?chart=${encodeURIComponent(chartId)}&keys=${keys}`);
+  }
+
+  async leaderboard(metric: LeaderboardMetric = 'rating'): Promise<GlobalLeaderboardEntry[]> {
+    if (metric !== 'rating' && this.statisticsVersion < 1) {
+      await this.ping();
+      if (this.statisticsVersion < 1) throw new ApiError('This server does not support detailed leaderboards yet. The overall rating table remains available.', 426);
+    }
+    const rows = await this.req('/api/leaderboard?metric=' + encodeURIComponent(metric));
+    if (!Array.isArray(rows)) throw new Error('Invalid leaderboard response.');
+    return rows.map((row, i) => ({ ...row, rank: Number.isInteger(row.rank) ? row.rank : i + 1 }));
   }
 }

@@ -6,9 +6,10 @@ import { bridge } from '../../core/store.ts';
 import type { MenuVisual } from '../menu-music.ts';
 import { drawMenuFountains } from '../menu-fountain.ts';
 
-/** osu-style additive edge-to-centre gradients, kept narrow around the content. */
+/** Beat-synchronised edge gradients and a restrained wash behind the content. */
 export function drawMenuBeatEdges(ctx: CanvasRenderingContext2D, w: number, h: number, visual: MenuVisual) {
-  const sideWidth = visual.previewSection ? Math.min(52, w * .05) : Math.min(32, w * .032);
+  if (visual.reducedMotion) return;
+  const sideWidth = visual.previewSection ? Math.min(116, w * .11) : Math.min(72, w * .07);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   for (const side of [0, 1]) {
@@ -16,20 +17,20 @@ export function drawMenuBeatEdges(ctx: CanvasRenderingContext2D, w: number, h: n
     if (!(impact > .008)) continue;
     ctx.save();
     ctx.translate(side ? w : 0, 0); ctx.scale(side ? -1 : 1, 1);
-    if (visual.previewSection) {
-      // A very faint wash on this half only: max 3.5% white at the outer edge,
-      // falling to transparent at the centre, behind all labels and controls.
+    {
+      // Two-beat normal pulses remain bilateral; kiai alternates sides. The
+      // broad wash is deliberately much dimmer than the bright edge core.
       const wash = ctx.createLinearGradient(0, 0, w / 2, 0);
-      wash.addColorStop(0, 'rgba(255,255,255,0.035)');
-      wash.addColorStop(.5, 'rgba(255,255,255,0.012)');
+      wash.addColorStop(0, `rgba(255,255,255,${visual.previewSection ? .065 : .025})`);
+      wash.addColorStop(.5, `rgba(255,255,255,${visual.previewSection ? .028 : .01})`);
       wash.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.globalAlpha = impact * impact;
       ctx.fillStyle = wash; ctx.fillRect(0, 0, w / 2, h);
     }
     const glow = ctx.createLinearGradient(0, 0, sideWidth, 0);
-    glow.addColorStop(0, 'rgba(255,255,255,0.48)');
-    glow.addColorStop(.18, 'rgba(255,255,255,0.24)');
-    glow.addColorStop(.55, 'rgba(255,255,255,0.075)');
+    glow.addColorStop(0, 'rgba(255,255,255,0.56)');
+    glow.addColorStop(.18, 'rgba(255,255,255,0.30)');
+    glow.addColorStop(.55, 'rgba(255,255,255,0.10)');
     glow.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.globalAlpha = impact;
     ctx.fillStyle = glow; ctx.fillRect(0, 0, sideWidth, h);
@@ -118,7 +119,7 @@ export class MenuScreen extends Screen {
     if (h >= 500) {
       const connected = this.app.serverOnline;
       ctx.beginPath(); ctx.arc(pad + 3, top - 27, 3, 0, Math.PI * 2); ctx.fillStyle = connected ? '#add3b6' : '#6b7984'; ctx.fill();
-      text(ctx, connected ? 'CONNECTED' : 'NOT CONNECTED', pad + 14, top - 24, { size: 9, color: connected ? '#a9c8b5' : '#77848e', spacing: '.8px' });
+      text(ctx, connected ? tr('CONNECTED') + ' · v' + (this.app.server?.serverVersion || '?') : 'NOT CONNECTED', pad + 14, top - 24, { size: 9, color: connected ? '#a9c8b5' : '#77848e', spacing: '.8px' });
     }
     if (!shortLandscape) text(ctx, 'A FALLING-NOTE RHYTHM EXPERIENCE', pad, top, { size: 10, spacing: '1.8px', color: '#8da69a', weight: 600 });
     text(ctx, 'NEONFALL', pad - 3, top + titleSize + 14, { size: titleSize, weight: 600, spacing: '-2px', color: '#edf1ef' });
@@ -127,8 +128,8 @@ export class MenuScreen extends Screen {
     const playY = shortLandscape ? top + titleSize + 30 : subtitleY + (compact ? 24 : 40);
     this.button(ctx, 'play', 'PLAY', pad, playY, contentW, shortLandscape ? 46 : compact ? 58 : 72, true);
     const secondaryY = playY + (shortLandscape ? 56 : compact ? 70 : 86);
-    const gap = 8, bw = (contentW - gap * 2) / 3;
-    ['settings', 'account', 'import'].forEach((id, i) => this.button(ctx, id, id.toUpperCase(), pad + i * (bw + gap), secondaryY, bw, 40));
+    const gap = 8, bw = (contentW - gap * 3) / 4;
+    ['rankings', 'settings', 'account', 'import'].forEach((id, i) => this.button(ctx, id, id.toUpperCase(), pad + i * (bw + gap), secondaryY, bw, 40));
     const acc = this.app.account.user;
     let label = acc ? tr('{name} · {rating} rating', { name: acc.nickname || acc.username, rating: (acc.rating || 0).toFixed(0) }) : this.app.serverOnline ? tr('Connected · sign in to sync your scores') : 'Offline session · your library, your pace';
     if (label.length > 47) label = label.slice(0, 44) + '…';
@@ -138,6 +139,7 @@ export class MenuScreen extends Screen {
     // Small utility marker stays left of (never beneath) the shared player.
     if (w >= 1080) text(ctx, 'NF / RHYTHM SYSTEM', pad, 49, { size: 10, color: '#7b8a96', spacing: '1.5px' });
     if (bridge()) this.button(ctx, 'quit', 'QUIT', w - 94, h - 49, 70, 30);
-    text(ctx, `v${this.app.version}  /  ${this.app.platform.toUpperCase()}  /  4–8K`, pad, h - 27, { size: 10, color: '#596774', weight: 500, spacing: '1px' });
+    const remote = this.app.serverOnline ? ' / ' + tr('SERVER') + ' v' + (this.app.server?.serverVersion || '?') : '';
+    text(ctx, `v${this.app.version}  /  ${this.app.platform.toUpperCase()}${remote}`, pad, h - 27, { size: 10, color: '#768894', weight: 500, spacing: '.5px', maxWidth: w - pad - 124 });
   }
 }

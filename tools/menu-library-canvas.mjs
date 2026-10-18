@@ -28,6 +28,7 @@ const audio = { previewActive: false, isPreviewPaused: false, ctx: { state: 'run
   stopPreview() { this.previewActive = false; }, stopAmbient() {}, async previewMusic() { this.previewActive = true; },
   samplePreviewSpectrum: () => ({ bands: Float32Array.from({ length: 17 }, (_, i) => .5 + Math.sin(i * .8) * .25), bass: .65, energy: .55 }) };
 const app = { w: 1280, h: 800, time: 10000, version: '0.2.0', platform: 'desktop', account: { user: null }, settings: { previewVolume: .35 }, audio,
+  server: { scoreVersion: 0 }, serverOnline: false,
   canvas: { getBoundingClientRect: () => ({ left: 0, top: 0 }) }, uiSound() {}, toast() {}, gotoScreen() {},
   store: { listCharts: async () => tracks.map(t => t.entry), getChartBytes: async id => tracks.find(t => t.entry.id === id)?.bytes, getBest: () => null } };
 app.ui = new UI(app); app.menuMusic = new MenuMusic(app); app.menuMusic.enabled = true;

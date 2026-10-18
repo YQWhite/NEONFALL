@@ -98,7 +98,7 @@ export class MenuMusic {
       this.loopPolicy = name === 'menu' ? 'playlist' : 'single';
       this.observedLoops = this.app.audio.previewLoopCount || 0;
     }
-    this.setEnabled(name === 'menu' || name === 'select' || name === 'settings' || name === 'account' || name === 'import');
+    this.setEnabled(name === 'menu' || name === 'select' || name === 'settings' || name === 'account' || name === 'import' || name === 'rankings');
   }
 
   private resetFountainObservation() {
@@ -434,6 +434,6 @@ export class MenuMusic {
     const online = app.serverOnline;
     const statusX = compact ? x + w - 16 : tx + 3, statusY = y + (compact ? 19 : 68);
     ctx.beginPath(); ctx.arc(statusX, statusY, 3, 0, Math.PI * 2); ctx.fillStyle = online ? '#add3b6' : '#6b7984'; ctx.fill();
-    if (!compact) text(ctx, online ? 'CONNECTED' : 'NOT CONNECTED', tx + 13, y + 71, { size: 8, spacing: '.3px', color: online ? '#a2b9aa' : '#7c8b97', maxWidth: tw - 13 });
+    if (!compact) text(ctx, online ? tr('CONNECTED') + ' · v' + (app.server?.serverVersion || '?') : 'NOT CONNECTED', tx + 13, y + 71, { size: 8, spacing: '.3px', color: online ? '#a2b9aa' : '#7c8b97', maxWidth: tw - 13 });
   }
 }

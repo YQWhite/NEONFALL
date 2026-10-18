@@ -8,6 +8,7 @@ import { AudioEngine } from './audio.ts';
 import { InputManager } from './input.ts';
 import { StoryboardPlayer, storyboardUsesBackground } from '../core/storyboard.ts';
 import { computePP, computeStars } from '../core/rating.ts';
+import { SCORING_VERSION, accuracyFromCounts, gradeFromAccuracy, judgmentCount, judgmentForError, judgmentWindows, scoreFromCounts } from '../core/scoring.ts';
 import { clamp, bytesToBlobUrl, guessMime } from '../core/zip.ts';
 
 export type PlayPhase = 'loading' | 'playing' | 'paused' | 'failed' | 'finished';
@@ -37,9 +38,15 @@ interface LaneLayout { x: number; y: number; hitY: number; w: number; scale: num
 const MAX_HIT_PARTICLES = 512;
 const MAX_POPUP_POOL = 128;
 const PARTICLE_COLORS = ['#ffffff', '#7df9ff', '#ff4bd8', '#ffd166'];
+const NO_SCORE_MODS: readonly string[] = [];
+const NO_TAIL_SCORE_MODS: readonly string[] = ['NoTail'];
 
-// Chart-time ticks: deterministic across FPS and speed mods (20 judgments/s).
+// Chart-time sustain ticks: deterministic across FPS, without inflating accuracy.
 export const HOLD_TICK_MS = 50;
+
+function newPlayId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `nf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
 
 export class PlaySession {
   chart: NFChart;
@@ -54,7 +61,9 @@ export class PlaySession {
   /** Visual-only map: constant speed leaves real BPM, audio and judgment clocks intact. */
   scrollMap: TimeMap;
   notes: NFChart['notes'] = [];
-  windows: number[]; // scaled judgment windows
+  windows: number[]; // head judgment windows at the chart OD
+  tailWindows: number[];
+  readonly totalJudgments: number;
   od: number;
   lengthMs: number;
   stars: number;
@@ -72,14 +81,14 @@ export class PlaySession {
   private rewindUntil = -Infinity;
   private healthTime = -Infinity;
   private lastNoteEnd = 0;
+  private playId = newPlayId();
+  private failedAtMs: number | undefined;
 
   score = 0;
   combo = 0;
   maxCombo = 0;
   hp = 100;
   counts: PlayCounts = { perfect: 0, great: 0, good: 0, ok: 0, bad: 0, miss: 0, holdTicks: 0 };
-  private accSum = 0;
-  private accDen = 0;
 
   popups: Popup[] = [];
   particles: Particle[] = [];
@@ -123,8 +132,9 @@ export class PlaySession {
     this.od = clamp(isFinite(chart.od) ? chart.od : 8, 0, 10);
     this.lengthMs = chart.meta.lengthMs;
 
-    const scale = 1 + (8 - this.od) * 0.08;
-    this.windows = JUDGE_WINDOWS.map((w) => w.ms * scale);
+    this.windows = judgmentWindows(this.od);
+    this.tailWindows = judgmentWindows(this.od, true);
+    this.totalJudgments = judgmentCount(chart.notes);
 
     // apply mods
     const perm = this.randomPerm(autoplaySeed);
@@ -267,17 +277,17 @@ export class PlaySession {
       if (this.mods.auto) {
         while (i >= 0 && this.notes[i].t <= t) {
           this.judgeNote(i, 'perfect');
-          if (this.notes[i].end) {
+          if (this.notes[i].end !== undefined) {
             this.startHold(c, i, this.notes[i].t);
             this.updateHold(c, t);
           }
           i = this.nextNote(c);
         }
       } else {
-        while (i >= 0 && this.notes[i].t < judgeTime - this.windows[4]) {
+        while (i >= 0 && Math.round(judgeTime - this.notes[i].t) > this.windows[3]) {
           this.judgeNote(i, 'miss');
           // A missed head must not silently remove its tail from accuracy.
-          if (this.notes[i].end) { this.startHold(c, i, judgeTime); this.completeHold(c, 'miss', false); }
+          if (this.notes[i].end !== undefined) { this.startHold(c, i, judgeTime); this.completeHold(c, 'miss', false); }
           i = this.nextNote(c);
         }
       }
@@ -304,6 +314,7 @@ export class PlaySession {
 
     if (this.hp <= 0 && !this.mods.noFail && !this.mods.auto && !this.finishPending) {
       this.phase = 'failed';
+      this.failedAtMs ??= clamp(t, 0, Math.max(0, this.lengthMs));
       this.audio.pauseMusic();
       if (this.videoEl) this.videoEl.pause();
     }
@@ -370,17 +381,16 @@ export class PlaySession {
     }
     const n = this.notes[i];
     const dt = t - n.t;
-    if (dt < -this.windows[4]) return;
-    if (dt > this.windows[4]) {
-      this.audio.playSynth('tick', this.settings.sfxVolume * 0.25);
-      return;
-    }
+    const grade = judgmentForError(dt, this.windows);
+    if (grade === null) return;
     if (this.holding[col] !== null) this.updateHold(col, t);
-    const grade = this.gradeOf(Math.abs(dt));
     this.judgeNote(i, grade);
-    if (n.end) this.startHold(col, i, t);
+    if (n.end !== undefined) {
+      this.startHold(col, i, t);
+      if (grade === 'miss') this.completeHold(col, 'miss', false);
+    }
     // Perfect/great already flash in judgeNote (also used by autoplay).
-    if (grade !== 'perfect' && grade !== 'great') this.flash(col);
+    if (grade !== 'perfect' && grade !== 'great' && grade !== 'miss') this.flash(col);
   }
 
   release(col: number, rawTimeMs: number) {
@@ -392,20 +402,10 @@ export class PlaySession {
       const n = this.notes[holdIdx];
       this.awardHoldTicks(col, t);
       const dt = t - (n.end ?? n.t);
-      if (Math.abs(dt) <= this.windows[4]) {
-        this.completeHold(col, this.gradeOf(Math.abs(dt)));
-      } else {
-        this.breakHold(col);
-      }
+      // NoTail removes release precision, not the need to sustain the body.
+      const grade = this.mods.noTail ? (dt >= 0 ? 'perfect' : 'miss') : judgmentForError(dt, this.tailWindows);
+      this.completeHold(col, grade ?? 'miss');
     }
-  }
-
-  private gradeOf(absDt: number): JudgeGrade {
-    if (absDt <= this.windows[0]) return 'perfect';
-    if (absDt <= this.windows[1]) return 'great';
-    if (absDt <= this.windows[2]) return 'good';
-    if (absDt <= this.windows[3]) return 'ok';
-    return 'bad';
   }
 
   private flash(col: number) {
@@ -465,18 +465,14 @@ export class PlaySession {
     if (grade === 'miss') {
       this.combo = 0;
       this.changeHealth(grade);
-      this.accDen++;
       this.playMissSfx();
     } else {
       this.combo++;
       this.maxCombo = Math.max(this.maxCombo, this.combo);
-      const mult = 1 + Math.min(this.combo / 100, 9);
-      this.score += Math.round(w.value * mult);
-      this.accSum += w.value;
-      this.accDen++;
       this.changeHealth(grade);
       this.playHitSfx(n);
     }
+    this.refreshScore();
     this.addPopup(n.col, grade, w);
     if (grade === 'perfect' || grade === 'great') this.flash(n.col);
     if (this.holding[n.col] === i) this.holding[n.col] = null;
@@ -499,12 +495,8 @@ export class PlaySession {
     while (this.nextHoldTick[col] <= until && this.nextHoldTick[col] < end) {
       this.nextHoldTick[col] += HOLD_TICK_MS;
       this.counts.holdTicks++;
-      this.counts.perfect++;
       this.combo++;
       this.maxCombo = Math.max(this.maxCombo, this.combo);
-      this.score += Math.round(32 * (1 + Math.min(this.combo / 100, 9)));
-      this.accSum += 320;
-      this.accDen++;
       this.hp = clamp(this.hp + 0.06, 0, 100);
       this.comboPulse = 1;
     }
@@ -526,8 +518,8 @@ export class PlaySession {
       this.breakHold(col);
     } else {
       this.awardHoldTicks(col, Math.min(t, end));
-      // Holding through the endpoint is NOT an automatic perfect release.
-      if (t > end + this.windows[4]) this.completeHold(col, 'miss');
+      if (this.mods.noTail && t >= end) this.completeHold(col, 'perfect');
+      else if (Math.round(t - end) > this.tailWindows[3]) this.completeHold(col, 'miss');
     }
   }
 
@@ -539,7 +531,6 @@ export class PlaySession {
     this.counts[grade] = (this.counts[grade] as number) + 1;
     this.nextHoldTick[col] = 0;
     this.holdResumeAt[col] = -Infinity;
-    this.accDen++;
     if (grade === 'miss') {
       this.combo = 0;
       if (affectHealth) this.changeHealth(grade, true);
@@ -547,11 +538,9 @@ export class PlaySession {
     } else {
       this.combo++;
       this.maxCombo = Math.max(this.maxCombo, this.combo);
-      const mult = 1 + Math.min(this.combo / 100, 9);
-      this.score += Math.round(w.value * mult);
-      this.accSum += w.value;
       if (affectHealth) this.changeHealth(grade, true);
     }
+    this.refreshScore();
     this.addPopup(col, grade, w, true);
     if (grade !== 'miss') this.flash(col);
   }
@@ -685,12 +674,12 @@ export class PlaySession {
     this.rewindUntil = -Infinity;
     this.input.reset();
     this.score = 0;
+    this.playId = newPlayId();
+    this.failedAtMs = undefined;
     this.combo = 0;
     this.maxCombo = 0;
     this.hp = 100;
     this.counts = { perfect: 0, great: 0, good: 0, ok: 0, bad: 0, miss: 0, holdTicks: 0 };
-    this.accSum = 0;
-    this.accDen = 0;
     this.clearEffects();
     this.finishPending = false;
     this.colFlash.fill(0);
@@ -748,18 +737,15 @@ export class PlaySession {
   }
 
   accuracy(): number {
-    return this.accDen > 0 ? this.accSum / (320 * this.accDen) : 1;
+    return accuracyFromCounts(this.counts);
   }
 
   grade(): string {
-    if (this.phase === 'failed' || this.hp <= 0) return 'F';
-    const acc = this.accuracy();
-    if (acc >= 0.9999 && this.counts.miss === 0 && this.counts.bad === 0 && this.counts.ok === 0) return 'SS';
-    if (acc >= 0.95) return 'S';
-    if (acc >= 0.9) return 'A';
-    if (acc >= 0.8) return 'B';
-    if (acc >= 0.7) return 'C';
-    return 'D';
+    return gradeFromAccuracy(this.accuracy(), this.phase !== 'failed' && this.hp > 0);
+  }
+
+  private refreshScore() {
+    this.score = scoreFromCounts(this.counts, this.totalJudgments, this.mods.noTail ? NO_TAIL_SCORE_MODS : NO_SCORE_MODS);
   }
 
   isRanked(): boolean {
@@ -768,7 +754,8 @@ export class PlaySession {
 
   buildResult(): PlayResult {
     const acc = this.accuracy();
-    const pp = this.isRanked() ? computePP(this.stars, acc, this.lengthMs, this.modsUsed()) : 0;
+    const passed = this.hp > 0 && this.phase !== 'failed';
+    const pp = passed && this.isRanked() ? computePP(this.stars, acc, this.lengthMs, this.modsUsed()) : 0;
     return {
       chartId: this.chart.id || 'local',
       keys: this.keys,
@@ -780,11 +767,14 @@ export class PlaySession {
       pp,
       grade: this.grade(),
       mods: this.modsUsed(),
-      passed: this.hp > 0 && this.phase !== 'failed',
+      passed,
       playedAt: Date.now(),
       title: this.chart.meta.title,
       version: this.chart.meta.version,
       durationMs: this.lengthMs,
+      scoreVersion: SCORING_VERSION,
+      playId: this.playId,
+      ...(this.failedAtMs !== undefined ? { failedAtMs: this.failedAtMs } : {}),
     };
   }
 
@@ -799,6 +789,7 @@ export class PlaySession {
     if (this.mods.noFail) out.push('NoFail');
     if (this.mods.downScroll) out.push('DownScroll');
     if (this.mods.constantSpeed) out.push('ConstantSpeed');
+    if (this.mods.noTail) out.push('NoTail');
     if (this.mods.speed !== 1) out.push(`Speed x${this.mods.speed.toFixed(2)}`);
     return out;
   }

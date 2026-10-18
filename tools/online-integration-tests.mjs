@@ -55,7 +55,9 @@ try {
   session.finish();
   const result = session.buildResult();
   assert.equal(result.counts.holdTicks, 19);
-  assert.equal(result.counts.perfect, 22);
+  assert.equal(result.counts.perfect, 3, 'body ticks do not inflate endpoint judgments');
+  assert.equal(result.scoreVersion, 2);
+  assert.equal(result.score, 1_000_000);
   assert.equal(result.acc, 1);
   const submitted = await api.submitScore(result);
   assert.equal(submitted.rating, computeRating([computePP(chart.stars, result.acc, chart.meta.lengthMs)]));
@@ -67,8 +69,8 @@ try {
   assert.deepEqual(mine[0].counts, result.counts);
   assert.equal(mine[0].pp, result.pp);
   assert.equal((await api.leaderboard())[0].rating, submitted.rating);
-  for (const changed of [{ mods: ['Auto'] }, { passed: false }]) {
-    const unranked = await api.submitScore({ ...result, ...changed, score: result.score + 1 });
+  for (const [index, changed] of [{ mods: ['Auto'] }, { passed: false, failedAtMs: 2500 }].entries()) {
+    const unranked = await api.submitScore({ ...result, ...changed, playId: result.playId + '-unranked-' + index });
     assert.equal(unranked.ranked, false);
     assert.equal(unranked.rating, submitted.rating, 'unranked play must not replace a ranked best');
     assert.equal((await api.scores(entry.id, 4))[0].score, result.score);
@@ -80,7 +82,7 @@ try {
     ok: true, count: result.counts, score: result.score, rating: submitted.rating,
     report: 'Real ServerApi + server + PlaySession press/release; isolated database; browser and audio hardware not exercised.',
   }, null, 2));
-  console.log('PASS actual ServerApi + chart upload/download + PlaySession 20Hz hold result + score/rating/leaderboard + current Web HTML');
+  console.log('PASS actual ServerApi + chart upload/download + PlaySession million-point hold result + score/rating/leaderboard + existing Web static serving (no build)');
 } finally {
   await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
 }

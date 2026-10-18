@@ -24,7 +24,9 @@ interface SavedSync {
   users: Record<string, UserInfo>;
   pending: PendingScore[];
 }
-const playKey = (result: PlayResult) => [result.chartId, result.keys, result.playedAt, result.score, result.acc].join(':');
+const playKey = (result: PlayResult) => result.playId || [result.chartId, result.keys, result.playedAt, result.score, result.acc].join(':');
+const syncable = (result: PlayResult) => isRankedResult(result) || result.scoreVersion === 2
+  && Array.isArray(result.mods) && !result.mods.some(mod => /^(auto|mirror|random)$/i.test(mod));
 
 /** Event-triggered score synchronization; credentials remain in the existing token store. */
 export class ScoreSync {
@@ -42,7 +44,7 @@ export class ScoreSync {
       const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
       if (value?.users && typeof value.users === 'object' && !Array.isArray(value.users) && Array.isArray(value.pending)) {
         this.saved.users = value.users;
-        this.saved.pending = value.pending.filter((item: PendingScore) => item && typeof item.server === 'string' && typeof item.username === 'string' && item.result && typeof item.result.chartId === 'string' && isRankedResult(item.result));
+        this.saved.pending = value.pending.filter((item: PendingScore) => item && typeof item.server === 'string' && typeof item.username === 'string' && item.result && typeof item.result.chartId === 'string' && syncable(item.result));
       }
     } catch { /* New installation or unavailable browser storage. */ }
   }
@@ -126,10 +128,13 @@ export class ScoreSync {
       return { rating: local.rating, ratingBefore };
     }
     const user = this.app.account.user, server = this.serverKey, username = user.username.toLowerCase();
-    if (isRankedResult(result)) {
-      const previous = this.saved.pending.find(item => item.server === server && item.username === username && item.result.chartId === result.chartId && item.result.keys === result.keys);
-      // Keep only the best unsent result per chart. Replaying never adds another rating slot.
-      if (!previous || result.pp > previous.result.pp || result.pp === previous.result.pp && (result.acc > previous.result.acc || result.acc === previous.result.acc && result.score >= previous.result.score)) {
+    if (syncable(result)) {
+      const isAttempt = result.scoreVersion === 2;
+      const previous = this.saved.pending.find(item => item.server === server && item.username === username
+        && (isAttempt ? playKey(item.result) === playKey(result) : item.result.scoreVersion !== 2 && item.result.chartId === result.chartId && item.result.keys === result.keys));
+      // New rules retain each completed attempt for pass/failure statistics;
+      // the server deduplicates playId and ranks only each player's best clear.
+      if (!previous || !isAttempt && (result.pp > previous.result.pp || result.pp === previous.result.pp && (result.acc > previous.result.acc || result.acc === previous.result.acc && result.score >= previous.result.score))) {
         if (previous) this.saved.pending.splice(this.saved.pending.indexOf(previous), 1);
         this.saved.pending.push({ server, username, result: { ...result, counts: { ...result.counts }, mods: [...result.mods] } });
         this.statuses.set(playKey(result), { state: 'pending' });
@@ -162,7 +167,10 @@ export class ScoreSync {
     if (!this.app.centralLibrary && !this.app.settings.serverUrl && !token) return;
     if (!token) {
       const online = await api.ping();
-      if (this.app.server === api && !this.app.settings.serverDisconnected) this.app.serverOnline = online;
+      if (this.app.server === api && !this.app.settings.serverDisconnected) {
+        this.app.serverOnline = online;
+        if (online) this.app.connectionEstablished?.(api);
+      }
       return;
     }
     api.setToken(token);
@@ -175,6 +183,13 @@ export class ScoreSync {
       this.app.serverOnline = true;
       this.app.account = { server: true, user };
       this.remember(user);
+      // A restored token can reconnect through /me after the initial ping failed.
+      // Do not consume the announcement until version and public text are loaded.
+      if (api.metadataLoaded === false) {
+        await api.ping();
+        if (!sameAccount()) return;
+      }
+      if (api.metadataLoaded !== false) this.app.connectionEstablished?.(api);
       const pending = this.saved.pending.filter(item => item.server === server && item.username === username && !item.rejected);
       this.sending = true;
       // Avoid repeatedly POSTing missing charts and consuming the score quota.

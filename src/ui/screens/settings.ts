@@ -9,6 +9,7 @@ import { PlaySession } from '../../engine/play.ts';
 import { DEFAULT_MODS, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, PLAYFIELD_BOTTOM_GAP_MAX, type NFChart } from '../../core/types.ts';
 import { BUILTIN_SKINS } from '../../core/default-skin.ts';
 import { resolveSelectedSkin } from '../../core/skin-selection.ts';
+import { scrollSpeedMultiplier, scrollSpeedFromMultiplier, judgmentWindows } from '../../core/scoring.ts';
 
 type Tab = 'general' | 'gameplay' | 'audio' | 'video' | 'input' | 'skin' | 'about';
 const TABS: Tab[] = ['general', 'gameplay', 'audio', 'video', 'input', 'skin', 'about'];
@@ -143,10 +144,14 @@ export class SettingsScreen extends Screen {
         }
         y += 76; note('Switch languages instantly.'); header('Visual feedback'); toggle('Particles', s.particles, 'particles', v => s.particles = v); toggle('Touch lane hints', s.touchHint, 'touchHint', v => s.touchHint = v); break;
       case 'gameplay':
-        header('Scroll & playfield'); slider('Scroll speed', s.scrollSpeed, .4, 2, .05, v => '×' + v.toFixed(2), 'scroll', v => s.scrollSpeed = v);
+        header('Scroll & playfield'); slider('Scroll speed', scrollSpeedMultiplier(s.scrollSpeed), .5, 4, .05, v => v.toFixed(2) + '×', 'scroll', v => s.scrollSpeed = scrollSpeedFromMultiplier(v));
+        note('1× is the default reading speed. BPM and SV still apply unless Constant Speed is enabled.');
         slider('Playfield scale', s.playfieldScale, PLAYFIELD_SCALE_MIN, PLAYFIELD_SCALE_MAX, .01, percent, 'scale', v => s.playfieldScale = v); note('Adjust from 50% to 200%. Tilted lanes stay within the screen.');
         fieldPosition('field-bottom-gap');
-        header('Judgment'); note('Good hits restore health. Breaks let you recover.'); note('PERFECT ±16 ms · GREAT ±40 ms · GOOD ±73 ms · OK ±103 ms · BAD ±127 ms (OD 8)'); break;
+        header('Judgment'); note('Good hits restore health. Breaks let you recover.');
+        note(tr('osu!mania ScoreV2 windows · OD {od}', { od: 8 }));
+        note(['PERFECT', 'GREAT', 'GOOD', 'OK', 'MEH'].map((name, i) => name + ' ±' + judgmentWindows(8)[i] + ' ms').join(' · '));
+        note('Release windows are 1.5× wider. A very late hit or release is a miss.'); break;
       case 'audio': {
         header('Volumes'); slider('Music', s.musicVolume, 0, 1, .02, percent, 'music', v => s.musicVolume = v); slider('Hit sounds', s.sfxVolume, 0, 1, .02, percent, 'sfx', v => s.sfxVolume = v); slider('Preview', s.previewVolume, 0, 1, .02, percent, 'preview', v => s.previewVolume = v);
         header('Timing & calibration'); slider('Audio offset', s.audioOffset, -250, 250, 1, v => Math.round(v) + ' ms', 'aoff', v => { s.audioOffset = v; s.audioOffsetAuto = false; });

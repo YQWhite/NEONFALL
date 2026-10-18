@@ -49,7 +49,7 @@ const app = { w: 1280, h: 800, ctx: null, settings, mods: { ...DEFAULT_MODS }, a
   canvas: { getBoundingClientRect: () => ({ left: 0, top: 0 }) }, uiSound() {}, toast() {}, gotoScreen(name, params) { this.destination = { name, params }; }, resize() {}, quitApp() {},
   saveSettings() { setLanguage(settings.language); localStorage.setItem('nf.settings.v1', JSON.stringify(settings)); this.saves++; }, saves: 0,
   server: { listCharts: async () => charts.map(x => x.entry), leaderboard: async () => [], myScores: async () => [], scores: async () => [] },
-  store: { settings, listCharts: async () => charts.map(x => x.entry), listSkins: async () => [{ id: 'remilia', name: parsedSkin.skin.name, keys: 4, size: skinBytes.length }], getSkinBytes: async () => skinBytes,
+  store: { settings, getToken: () => '', listCharts: async () => charts.map(x => x.entry), listSkins: async () => [{ id: 'remilia', name: parsedSkin.skin.name, keys: 4, size: skinBytes.length }], getSkinBytes: async () => skinBytes,
     getChartBytes: async id => charts.find(x => x.entry.id === id)?.bytes, getBest: () => result, getBestScores: () => ({ [result.chartId]: result }), deleteSkin: async () => {}, },
 };
 app.ui = new UI(app); app.menuMusic = new MenuMusic(app); app.menuMusic.entry = track.entry; app.menuMusic.ensureStarted = async () => {}; app.menuMusic.select = async () => {};

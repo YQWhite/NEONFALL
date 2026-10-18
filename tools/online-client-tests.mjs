@@ -72,7 +72,7 @@ try {
   console.log('PASS HTTP API identity, central chart routing, transfer deduplication, persistent cache, errors and timeout');
 
   const local = [{ id: 'abcd', name: 'Cached chart' }, { id: 'private', name: 'Local import' }];
-  const app = { centralLibrary: true, serverOnline: true, server: api, store: { listCharts: async () => local } };
+  const app = { settings: {}, centralLibrary: true, serverOnline: true, server: api, store: { listCharts: async () => local } };
   const merged = await listPlaybackCharts(app);
   assert.deepEqual(merged.map(entry => entry.id), ['abcd', 'private']);
   assert.equal(merged[0].server, true);
@@ -94,6 +94,7 @@ try {
 
   let savedToken = 'saved-session';
   const account = {
+    settings: {},
     store: { getToken: () => savedToken, setToken: value => { savedToken = value; }, getProfile: () => ({ username: 'local' }) },
     server: { setToken() {}, async me() { throw new Error('offline'); } },
   };

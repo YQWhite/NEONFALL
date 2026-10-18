@@ -45,6 +45,8 @@ const renderer=new PlayfieldRenderer(layout, p=>assets.get(p), {...DEFAULT_SETTI
 assert.equal(renderer.beatHeight(),275);
 const session = Object.create(PlaySession.prototype);
 session.skin = layout; session.keys = 4;
+// This lightweight prototype fixture skips constructor field initializers.
+session.laneWidthCache = []; session.laneLayoutCache = [];
 assert.equal(session.laneStart(),124);
 assert.equal((session.laneX(0)+session.laneX(3))/2,256);
 // Track actual renderer draw calls with fake decoded images, independent of DOM.

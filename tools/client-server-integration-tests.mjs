@@ -42,7 +42,7 @@ try {
   };
   const submitted = await client.submitScore(result);
   assert.equal(submitted.rank, 1); assert.ok(submitted.rating > 0 && submitted.rating < 100, 'server recomputes rating');
-  assert.equal((await client.scores(entry.id, 4))[0].username, 'client_test');
+  assert.equal((await client.scores(entry.id, 4, 1))[0].username, 'client_test');
   assert.equal((await client.myScores())[0].title, chart.meta.title);
   assert.equal((await client.leaderboard())[0].nickname, 'Client integration');
   const visitor = new ServerApi(base);

@@ -9,7 +9,7 @@ fs.mkdirSync(output, { recursive: true });
 let checks = 0;
 const check = (value, message) => { assert.ok(value, message); checks++; };
 const scoringResult = session => {
-  const { playedAt, ...result } = session.buildResult();
+  const { playedAt, playId, ...result } = session.buildResult();
   return result;
 };
 function make(notes, { particles = true, auto = false, skin = null } = {}) {
@@ -30,7 +30,7 @@ function make(notes, { particles = true, auto = false, skin = null } = {}) {
 }
 
 // One hit has exactly one seven-particle burst for every non-miss manual grade.
-for (const offset of [0, 35, 65, 90, 115]) {
+for (const offset of [0, 35, 65, 90, -115]) {
   const { s, press } = make([{ t: 1000, col: 0 }]);
   press(0, 1000 + offset);
   check(s.particles.length === 7, `offset ${offset}: duplicate or missing hit burst`);

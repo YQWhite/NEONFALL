@@ -85,7 +85,7 @@ export class PlayfieldRenderer {
   }
 
   beatHeight(): number {
-    // scrollSpeed is pixels/ms, normalized at 120 BPM (500ms/beat).
+    // Storage remains pixels/ms at 120 BPM; UI x1 is .55 (275px/beat).
     return 500 * this.settings.scrollSpeed * this.mods.speed;
   }
 
@@ -864,7 +864,7 @@ export class PlayfieldRenderer {
    * perspective, field width and the column that was hit. */
   drawJudgement(ctx: CanvasRenderingContext2D, sess: PlaySession, x: number, y: number, maxWidth: number) {
     const now = sess.chartTime();
-    const grades = ['PERFECT', 'GREAT', 'GOOD', 'OK', 'BAD', 'MISS'];
+    const grades = ['PERFECT', 'GREAT', 'GOOD', 'OK', 'MEH', 'MISS'];
     let popup: PlaySession['popups'][number] | undefined;
     for (let i = sess.popups.length - 1; i >= 0; i--) {
       const p = sess.popups[i], age = now - p.t0;
@@ -873,7 +873,7 @@ export class PlayfieldRenderer {
     }
     if (!popup) return;
     const age = now - popup.t0, label = popup.label.replace(/^TAIL /, '');
-    const grade = label.toLowerCase() as keyof NonNullable<NFSkin['judgments']>;
+    const grade = (label === 'MEH' ? 'bad' : label.toLowerCase()) as keyof NonNullable<NFSkin['judgments']>;
     const scale = .92 + .08 * clamp(age / 70, 0, 1);
     const fade = age > 600 ? 1 - (age - 600) / 300 : 1;
     const imgPath = this.skin?.judgments?.[grade], img = imgPath ? this.cached(imgPath) : null;

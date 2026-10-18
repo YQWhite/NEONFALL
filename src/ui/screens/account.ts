@@ -9,6 +9,7 @@ import { scoreSync } from '../../api/score-sync.ts';
 import { cropAvatar } from '../avatar-upload.ts';
 import { drawAvatar } from '../avatar-art.ts';
 import { modsLabel } from '../mod-labels.ts';
+import { serverVersionMismatch } from '../server-notice.ts';
 
 export class AccountScreen extends Screen {
   readonly name = 'account';
@@ -300,7 +301,7 @@ export class AccountScreen extends Screen {
       scoreSync(this.app).restoreCachedAccount();
       void scoreSync(this.app).sync();
       await Promise.all([this.loadLeaderboard(), this.loadMyPlays()]);
-      if (this.operationCurrent(operation, api)) this.app.toast(tr('connected to {url}', { url }));
+      if (this.operationCurrent(operation, api)) this.app.connectionEstablished?.(api, true);
     } catch (e: any) {
       if (this.operationCurrent(operation, api)) this.error = e?.message || 'connection failed';
     } finally { if (this.operation === operation) this.busy = ''; }
@@ -309,6 +310,7 @@ export class AccountScreen extends Screen {
   disconnectServer() {
     if (this.busy) return;
     ++this.operation;
+    this.app.dismissServerNotice?.();
     const old = this.app.server;
     this.avatarCrop?.abort(); this.avatarCrop = null;
     this.avatarInput?.remove(); this.avatarInput = null;
@@ -422,14 +424,19 @@ export class AccountScreen extends Screen {
     }
     {
       const connected = !this.app.settings.serverDisconnected && (this.app.serverOnline || acc.server);
-      fillPanel(ctx, px, y, pw, 174, { r: 18 }); text(ctx, connected ? 'CONNECTED' : 'CONNECT A SERVER', formX, y + 32, { size: 13, color: THEME.accent });
+      fillPanel(ctx, px, y, pw, connected ? 210 : 174, { r: 18 }); text(ctx, connected ? 'CONNECTED' : 'CONNECT A SERVER', formX, y + 32, { size: 13, color: THEME.accent });
       const narrow = formW < 400;
       this.fieldRow(ctx, formX, y + 70, narrow ? formW : formW - 130, 'server url (http://host:port)', this.serverUrl, connected || !!this.busy);
       if (ui.button('connect', narrow ? formX : formX + formW - 116, narrow ? y + 122 : y + 70, narrow ? formW : 116, narrow ? 32 : 42, connected ? 'DISCONNECT' : 'CONNECT', { accent: !connected, disabled: !!this.busy })) {
         if (connected) this.disconnectServer(); else void this.connectServer();
       }
       if (!narrow && (this.error || this.busy)) text(ctx, this.error || this.busy, formX, y + 144, { size: 11, color: this.error ? THEME.red : THEME.dim, maxWidth: formW });
-      y += 192;
+      if (connected) {
+        const remote = this.app.server.serverVersion || '';
+        text(ctx, tr('Server {server} · Client {client}', { server: remote || tr('Unknown version'), client: this.app.version }), formX, y + 174, { size: 10, color: THEME.accent2, maxWidth: formW });
+        if (serverVersionMismatch(remote, this.app.version)) text(ctx, 'Versions differ · connection maintained', formX, y + 195, { size: 10, color: THEME.gold, maxWidth: formW });
+      }
+      y += connected ? 228 : 192;
     }
     if (this.myPlays.length || user) {
       const rows = this.myPlays.slice(0, 12), ph = Math.max(130, 62 + rows.length * 58);

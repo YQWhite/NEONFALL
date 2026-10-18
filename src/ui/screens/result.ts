@@ -53,7 +53,7 @@ export class ResultScreen extends Screen {
         if (bytes) id = await sha1Hex(bytes);
       }
       if (!current()) return;
-      const scores = await api.scores(id, result.keys);
+      const scores = await api.scores(id, result.keys, result.scoreVersion === 2 ? 2 : 1);
       if (current()) this.leaderboard = scores;
     } catch { if (current()) this.leaderboard = []; }
   }
@@ -87,7 +87,7 @@ export class ResultScreen extends Screen {
     if (r.mods.length) text(ctx, modsLabel(r.mods), pad + heroW / 2, py + ph - 16, { size: 9, color: THEME.dim, align: 'center', maxWidth: heroW - 20, translate: false });
     fillPanel(ctx, px, py, pw, ph, { r: 20, fill: '#151f27' });
     const ip = compact ? 18 : 28, x = px + ip, inner = pw - ip * 2;
-    text(ctx, 'SCORE', x, py + 28, { size: 10, color: THEME.dim, spacing: '1px' });
+    text(ctx, r.scoreVersion === 2 ? 'SCORE / 1,000,000' : 'LEGACY SCORES', x, py + 28, { size: 10, color: THEME.dim, maxWidth: Math.max(50, inner - 106) });
     text(ctx, r.score.toLocaleString(), x, py + (compact ? 62 : 83), { size: compact ? 30 : 48, weight: 600, color: '#edf4ef', maxWidth: inner });
     let y = py + (compact ? 87 : 122);
     for (const [i, item] of [['ACCURACY', (r.acc * 100).toFixed(2) + '%'], ['MAX COMBO', r.maxCombo + '×']].entries()) {
@@ -98,7 +98,7 @@ export class ResultScreen extends Screen {
     y += compact ? 42 : 64;
     ctx.fillStyle = THEME.panelLine; ctx.fillRect(x, y, inner, 1); y += compact ? 18 : 28;
     if (!compact) { text(ctx, 'JUDGMENT BREAKDOWN', x, y, { size: 10, color: THEME.dim }); y += 28; }
-    const counts = [['PERFECT', r.counts.perfect, THEME.gold], ['GREAT', r.counts.great, THEME.accent], ['GOOD', r.counts.good, THEME.green], ['OK', r.counts.ok, THEME.violet], ['BAD', r.counts.bad, THEME.orange], ['MISS', r.counts.miss, THEME.red]] as const;
+    const counts = [['PERFECT', r.counts.perfect, THEME.gold], ['GREAT', r.counts.great, THEME.accent], ['GOOD', r.counts.good, THEME.green], ['OK', r.counts.ok, THEME.violet], [r.scoreVersion === 2 ? 'MEH' : 'BAD', r.counts.bad, THEME.orange], ['MISS', r.counts.miss, THEME.red]] as const;
     const step = compact ? 23 : 44;
     counts.forEach(([label, count, color], i) => {
       const cx = x + i % 3 * (inner / 3), cy = y + Math.floor(i / 3) * step;
@@ -112,7 +112,7 @@ export class ResultScreen extends Screen {
     }
     if (this.syncStatus) {
       const state = this.syncStatus.state;
-      const label = state === 'synced' ? 'Score synced' : state === 'update-required' ? 'Saved · update server to sync Constant Speed scores' : state === 'missing-chart' ? 'Saved · chart must be on the server to sync' : state === 'rejected' ? 'Saved locally · server rejected this score' : 'Saved · syncing automatically';
+      const label = state === 'synced' ? 'Score synced' : state === 'update-required' ? 'Saved · update server to sync these scoring rules' : state === 'missing-chart' ? 'Saved · chart must be on the server to sync' : state === 'rejected' ? 'Saved locally · server rejected this score' : 'Saved · syncing automatically';
       text(ctx, label, pad, h - 76, { size: 10, color: state === 'synced' ? THEME.accent : THEME.dim, maxWidth: w - pad * 2 });
     }
     if (this.app.serverOnline && this.app.ui.button('result-rankings', px + pw - 122, py + 12, 108, 28, 'RANKINGS', { small: true })) this.setLeaderboard(!this.showLeaderboard);

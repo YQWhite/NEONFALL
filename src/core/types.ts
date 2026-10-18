@@ -106,17 +106,23 @@ export interface PlayResult {
   chartId: string; keys: number; score: number; acc: number; maxCombo: number; counts: PlayCounts;
   stars: number; pp: number; grade: string; mods: string[]; passed: boolean; playedAt: number;
   title: string; version: string; durationMs: number;
+  /** Missing denotes legacy combo/tick scoring; never compare it as a million-point score. */
+  scoreVersion?: number;
+  /** Stable for one attempt, including upload retries; a gameplay retry starts a new ID. */
+  playId?: string;
+  /** Chart-time position of the first failure; absent for clears and unknown legacy data. */
+  failedAtMs?: number;
 }
 export interface UserInfo { username: string; nickname: string; email: string; emailVerified: boolean; createdAt: number; rating: number; bestPp: number; avatar?: string; }
-export interface LeaderboardEntry { rank: number; username: string; nickname: string; score: number; acc: number; maxCombo: number; playedAt: number; isSelf?: boolean; mods?: string[]; }
+export interface LeaderboardEntry { rank: number; username: string; nickname: string; score: number; acc: number; maxCombo: number; playedAt: number; isSelf?: boolean; mods?: string[]; grade?: string; avatar?: string; scoreVersion?: number; }
 export type JudgeGrade = 'perfect' | 'great' | 'good' | 'ok' | 'bad' | 'miss';
 export const JUDGE_WINDOWS: { g: JudgeGrade; ms: number; value: number; color: string; label: string }[] = [
   { g: 'perfect', ms: 16, value: 320, color: '#ffd94d', label: 'PERFECT' },
   { g: 'great', ms: 40, value: 300, color: '#46e8ff', label: 'GREAT' },
   { g: 'good', ms: 73, value: 200, color: '#59ff8f', label: 'GOOD' },
   { g: 'ok', ms: 103, value: 100, color: '#b58aff', label: 'OK' },
-  { g: 'bad', ms: 127, value: 50, color: '#ff8a5c', label: 'BAD' },
-  { g: 'miss', ms: 127, value: 0, color: '#ff4b5c', label: 'MISS' },
+  { g: 'bad', ms: 127, value: 50, color: '#ff8a5c', label: 'MEH' },
+  { g: 'miss', ms: 164, value: 0, color: '#ff4b5c', label: 'MISS' },
 ];
 export const GRADE_COLORS: Record<string, string> = {
   SS: '#ffd94d', S: '#ffd94d', A: '#46e8ff', B: '#59ff8f', C: '#b58aff', D: '#ff8a5c', F: '#ff4b5c',
@@ -124,11 +130,11 @@ export const GRADE_COLORS: Record<string, string> = {
 export const NEON_COLORS = ['#3fd6ff', '#ff4bd8', '#ffd166', '#6dff8a', '#ff7a5c', '#b58aff', '#ffe94d'];
 export interface Mods {
   auto: boolean; mirror: boolean; random: boolean; hidden: boolean; fadeIn: boolean; flashlight: boolean;
-  noFail: boolean; downScroll: boolean; speed: number; constantSpeed: boolean;
+  noFail: boolean; downScroll: boolean; speed: number; constantSpeed: boolean; noTail: boolean;
 }
 export const DEFAULT_MODS: Mods = {
   auto: false, mirror: false, random: false, hidden: false, fadeIn: false,
-  flashlight: false, noFail: false, downScroll: false, speed: 1, constantSpeed: false,
+  flashlight: false, noFail: false, downScroll: false, speed: 1, constantSpeed: false, noTail: false,
 };
 export interface Settings {
   language: 'zh-CN' | 'en';

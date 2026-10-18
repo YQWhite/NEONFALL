@@ -345,17 +345,19 @@ for (const [w,h] of [[1280,720],[780,360],[360,780]]) {
   assert.ok(rightCtx.getImageData(w-2,h*.5|0,1,1).data[0] > rightCtx.getImageData(1,h*.5|0,1,1).data[0], 'right impact is visually right');
   const kiai=render(w,h,{...section,leftImpact:1,rightImpact:0,sectionBurst:0,previewSection:true},`${w}x${h}-preview`);
   const normalRow=leftCtx.getImageData(0,h*.5|0,w,1).data,kiaiCtx=kiai.getContext('2d'),kiaiRow=kiaiCtx.getImageData(0,h*.5|0,w,1).data;
-  const normalWidth=Math.min(32,w*.032),kiaiWidth=Math.min(52,w*.05);
+  const normalWidth=Math.min(72,w*.07),kiaiWidth=Math.min(116,w*.11);
   for(const [row,name] of [[normalRow,'normal'],[kiaiRow,'kiai']]){
     for(let x=1;x<w/2;x++)assert.ok(row[x*4]<=row[(x-1)*4]+1,`${w}px ${name}: brightness decreases from edge to centre`);
     for(let x=Math.ceil(w/2);x<w;x++)assert.deepEqual(Array.from(row.slice(x*4,x*4+4)),[13,18,24,255],`${w}px ${name}: inactive half remains unchanged`);
   }
-  assert.deepEqual(Array.from(normalRow.slice(Math.ceil(normalWidth)*4,Math.ceil(normalWidth)*4+4)),[13,18,24,255],'normal gradient is confined to narrow 32px/3.2% band');
+  assert.ok(normalRow[Math.ceil(normalWidth)*4]-13<=7,'normal light outside the edge core stays below 3% white');
+  assert.ok(normalRow[Math.round(w*.25)*4]>13,'normal beats also have a subtle screen wash');
+  assert.ok(normalRow[Math.round(Math.min(52,w*.05))*4]>20,'wider edge has visible energy beyond the old narrow band');
   const widerX=Math.ceil(normalWidth)+2,outsideKiai=Math.ceil(kiaiWidth)+3;
   assert.ok(kiaiRow[widerX*4]>normalRow[widerX*4]+1,'kiai narrow gradient extends slightly beyond normal band');
   assert.ok(kiaiRow[widerX*4]>kiaiRow[outsideKiai*4]+1,'kiai has a distinct narrow core before the half-screen accent');
   const faintX=Math.round(w*.25),faint=kiaiRow[faintX*4]-13;
-  assert.ok(faint>0&&faint<=10,'kiai half-screen accent is visible but very faint');
+  assert.ok(faint>normalRow[faintX*4]-13&&faint<=10,'kiai wash is stronger than normal but stays restrained');
   assert.deepEqual(Array.from(leftCtx.getImageData(0,h*.2|0,w,1).data),Array.from(normalRow),'horizontal normal gradient has no pointed vertical profile');
   assert.deepEqual(Array.from(kiaiCtx.getImageData(0,h*.8|0,w,1).data),Array.from(kiaiRow),'horizontal kiai gradient has no pointed vertical profile');
   const kiaiRight=render(w,h,{...section,leftImpact:0,rightImpact:1,sectionBurst:0,previewSection:true});
@@ -365,6 +367,8 @@ for (const [w,h] of [[1280,720],[780,360],[360,780]]) {
   fs.writeFileSync(path.join(edgeOut,`kiai-gradient-${w}x${h}.png`),kiai.toBuffer('image/png'));
   const quiet = render(w,h,visual);
   assert.deepEqual(Array.from(quiet.getContext('2d').getImageData(1,h*.5|0,1,1).data),[13,18,24,255],'quiet visual draws no white edge');
+  const reducedFrame=render(w,h,{...section,leftImpact:1,rightImpact:1,reducedMotion:true});
+  assert.deepEqual(Array.from(reducedFrame.getContext('2d').getImageData(1,h*.5|0,1,1).data),[13,18,24,255],'reduced motion suppresses even stale nonzero impulses');
 }
 for (const [w,h] of [[1280,720],[360,780]]) {
   const canvas = createCanvas(w,h),ctx = canvas.getContext('2d');

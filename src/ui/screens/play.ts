@@ -13,6 +13,7 @@ import type { SBPass } from '../../core/storyboard.ts';
 import { resolveSelectedSkin } from '../../core/skin-selection.ts';
 import { scoreSync } from '../../api/score-sync.ts';
 import { laneAtPoint } from '../../engine/lane-geometry.ts';
+import { scrollSpeedMultiplier, scrollSpeedFromMultiplier } from '../../core/scoring.ts';
 
 export class PlayScreen extends Screen {
   readonly name = 'play';
@@ -23,6 +24,7 @@ export class PlayScreen extends Screen {
   private status = 'loading…';
   private statusPct = 0;
   private handoff = false;
+  private failureRecorded = false;
   private transition = 0;
   private pausedT = 0;
   private visualPhase: PlaySession['phase'] | null = null;
@@ -39,6 +41,7 @@ export class PlayScreen extends Screen {
     this.errorTimer = null;
     this.visualPhase = null;
     this.handoff = false;
+    this.failureRecorded = false;
     this.entry = p.entry;
     this.status = 'loading chart…';
     this.statusPct = 0.1;
@@ -243,6 +246,10 @@ export class PlayScreen extends Screen {
     const s = this.sess;
     if (!s) return;
     s.update(dt, now);
+    if (s.phase === 'failed' && !this.failureRecorded) {
+      this.failureRecorded = true;
+      scoreSync(this.app).submit(s.buildResult());
+    } else if (s.phase === 'playing') this.failureRecorded = false;
     if (this.visualPhase !== s.phase) {
       if (this.visualPhase && ['playing', 'paused', 'failed'].includes(s.phase) && this.app.animateViewChange) this.app.animateViewChange(() => {});
       this.visualPhase = s.phase;
@@ -439,11 +446,12 @@ export class PlayScreen extends Screen {
     const by = py + (short ? 98 : 116), half = (pw - 72) / 2;
     const brightness = this.app.ui.slider('pause-bgdim', px + 28, by + 24, half, 24, 1 - s.bgDim, 0, 1, .01);
     const dim = 1 - brightness;
-    const speed = this.app.ui.slider('pause-speed', px + 44 + half, by + 24, half, 24, s.scrollSpeed, .4, 2, .05);
+    const speedMultiplier = this.app.ui.slider('pause-speed', px + 44 + half, by + 24, half, 24, scrollSpeedMultiplier(s.scrollSpeed), .5, 4, .05);
+    const speed = scrollSpeedFromMultiplier(speedMultiplier);
     text(ctx, 'Background brightness', px + 28, by + 10, { size: 12, color: THEME.dim });
     text(ctx, Math.round(brightness * 100) + '%', px + 28 + half, by + 10, { size: 12, align: 'right', color: THEME.accent });
     text(ctx, 'Scroll speed', px + 44 + half, by + 10, { size: 12, color: THEME.dim });
-    text(ctx, '×' + speed.toFixed(2), px + pw - 28, by + 10, { size: 12, align: 'right', color: THEME.accent });
+    text(ctx, speedMultiplier.toFixed(2) + '×', px + pw - 28, by + 10, { size: 12, align: 'right', color: THEME.accent });
     if (dim !== s.bgDim || speed !== s.scrollSpeed) { s.bgDim = dim; s.scrollSpeed = speed; this.app.saveSettings(); }
     const resumeY = by + 78;
     if (this.app.ui.button('p-resume', px + 28, resumeY, pw - 56, 48, 'RESUME', { accent: true })) this.sess?.resume();

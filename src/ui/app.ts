@@ -12,6 +12,7 @@ import { setLanguage } from './i18n.ts';
 import { DisplayMode } from './display-mode.ts';
 import { scoreSync } from '../api/score-sync.ts';
 import { ScreenTransition } from './screen-transition.ts';
+import { showServerNotice } from './server-notice.ts';
 
 export interface ScreenParams {
   [k: string]: any;
@@ -65,7 +66,7 @@ export class App {
   serverOnline = false;
   toastMsg = '';
   toastT0 = 0;
-  version = '0.2.8';
+  version = '0.2.9';
   time = 0;
   testMode = false;
   platform: 'web' | 'desktop' | 'android' = 'web';
@@ -83,6 +84,9 @@ export class App {
   private drawing = false;
   private hasDrawn = false;
   private pendingViewChanges: (() => void)[] = [];
+  private announcedServers = new Set<string>();
+  private pendingServerNotice: ServerApi | null = null;
+  private closeServerNotice: (() => void) | null = null;
 
   constructor() {
     setLanguage(this.store.settings.language);
@@ -303,6 +307,7 @@ export class App {
     }
     this.screen?.update(dt, now);
     this.menuMusic.update();
+    this.flushServerNotice();
     // flush queued disposals (element cleanup)
     for (const fn of this.disposeQueue) fn();
     this.disposeQueue.length = 0;
@@ -428,7 +433,37 @@ export class App {
     const api = this.server, online = await api.ping();
     if (this.server !== api || this.settings.serverDisconnected) return false;
     this.serverOnline = online;
+    if (online) this.connectionEstablished(api);
     return this.serverOnline;
+  }
+
+  /** Once per server per app session, or on an explicit reconnect. Polls stay quiet. */
+  connectionEstablished(api: ServerApi = this.server, explicit = false) {
+    if (api !== this.server || !this.serverOnline || this.settings.serverDisconnected || api.metadataLoaded === false) return;
+    const key = api.base || (typeof location === 'undefined' ? 'same-origin' : location.origin);
+    this.announcedServers ??= new Set<string>();
+    if (!explicit && this.announcedServers.has(key)) return;
+    this.announcedServers.add(key);
+    this.pendingServerNotice = api;
+  }
+
+  dismissServerNotice() {
+    this.pendingServerNotice = null;
+    this.closeServerNotice?.(); this.closeServerNotice = null;
+  }
+
+  private flushServerNotice() {
+    const api = this.pendingServerNotice;
+    if (!api || this.screen?.name === 'play' || !this.screen) return;
+    if (this.server !== api || !this.serverOnline || this.settings.serverDisconnected) { this.pendingServerNotice = null; return; }
+    this.pendingServerNotice = null;
+    this.closeServerNotice?.();
+    this.pointer.down = false; this.ui.cancelPointer();
+    this.closeServerNotice = showServerNotice({
+      address: api.base || location.origin,
+      serverVersion: api.serverVersion || '', localVersion: this.version,
+      announcement: api.announcement || null,
+    }, () => { this.closeServerNotice = null; this.pointer.down = false; this.ui.cancelPointer(); });
   }
 
   /** load account from server token (web mode) */

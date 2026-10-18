@@ -67,7 +67,7 @@ try {
   let saved = (await api.myScores())[0];
   assert.equal(saved.pp, constantPP, 'server ignores spoofed client pp and stars');
   assert.equal(saved.score, result.score); assert.equal(saved.acc, result.acc); assert.deepEqual(saved.counts, result.counts);
-  assert.deepEqual((await api.scores(chartId, 4))[0].mods, ['ConstantSpeed']);
+  assert.deepEqual((await api.scores(chartId, 4, 1))[0].mods, ['ConstantSpeed']);
   for (const excluded of ['Auto', 'Mirror', 'Random']) {
     assert.equal((await api.submitScore({ ...result, mods: ['ConstantSpeed', excluded] })).ranked, false);
     assert.equal((await api.myScores())[0].pp, constantPP);
@@ -79,7 +79,7 @@ try {
   const second = new ServerApi(api.base);
   await second.register('cs_other', 'CS other', 'test-only-password', 'other@example.invalid');
   await second.submitScore({ ...result, score: 31000 });
-  leaderboard = await second.scores(chartId, 4);
+  leaderboard = await second.scores(chartId, 4, 1);
   assert.equal(leaderboard.length, 2); assert.deepEqual(leaderboard.map(row => row.mods), [['ConstantSpeed'], []]);
   assert.equal(leaderboard[0].score, 31000, 'leaderboard retains raw score');
   assert.ok((await second.leaderboard()).every(row => !Object.hasOwn(row, 'mods')), 'profile rating is not falsely attributed to one mod');
@@ -95,7 +95,7 @@ try {
   saved = JSON.parse(fs.readFileSync(path.join(legacyData, 'scores.json'), 'utf8'))[0];
   assert.equal(saved.pp, constantPP); assert.equal(saved.playedAt, result.playedAt); assert.equal(saved.score, result.score);
   assert.deepEqual(saved.counts, result.counts); assert.deepEqual(saved.mods, result.mods);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(legacyData, 'users.json'), 'utf8')).legacy_cs.ratingVersion, 3);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(legacyData, 'users.json'), 'utf8')).legacy_cs.ratingVersion, 4);
   await close(migrated.server); migrated = await start(legacyData);
   assert.equal((await migrated.api.leaderboard())[0].rating, computeRating([constantPP]), 'restarting never compounds the multiplier');
   await close(migrated.server);

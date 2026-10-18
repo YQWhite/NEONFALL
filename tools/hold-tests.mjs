@@ -10,13 +10,13 @@ const make=(auto=false, inputOffset=0, notes=[{t:1000,col:0,end:2000}])=>{
  return {s,time(t){now=t;s.update(16,t)},press(t){now=t;down=true;s.press(0,t)},release(t){now=t;down=false;s.release(0,t)}};
 };
 assert.equal(HOLD_TICK_MS,50);
-let x=make();x.press(1000);x.time(1500);assert.equal(x.s.counts.holdTicks,10);assert.equal(x.s.combo,11);x.time(2000);assert.equal(x.s.isHeld(0),true,'tail requires release');assert.equal(x.s.counts.holdTicks,19);x.release(2000);assert.equal(x.s.counts.perfect,21);assert.equal(x.s.combo,21);assert.equal(x.s.accuracy(),1);x.release(2000);assert.equal(x.s.counts.perfect,21);
+let x=make();x.press(1000);x.time(1500);assert.equal(x.s.counts.holdTicks,10);assert.equal(x.s.combo,11);x.time(2000);assert.equal(x.s.isHeld(0),true,'tail requires release');assert.equal(x.s.counts.holdTicks,19);x.release(2000);assert.equal(x.s.counts.perfect,2);assert.equal(x.s.combo,21);assert.equal(x.s.accuracy(),1);assert.equal(x.s.score,1000000);x.release(2000);assert.equal(x.s.counts.perfect,2);
 x=make();x.press(1000);x.release(2040);assert.equal(x.s.counts.great,1);assert.equal(x.s.counts.holdTicks,19);assert.ok(x.s.accuracy()<1);
 x=make();x.press(1000);x.release(1500);assert.equal(x.s.counts.miss,1);assert.ok(x.s.accuracy()<1);assert.equal(x.s.combo,0);assert.equal(x.s.isHeld(0),false);
 x=make();x.press(1000);x.time(2200);assert.equal(x.s.counts.miss,1,'overhold tail must miss');assert.equal(x.s.counts.holdTicks,19,'no ticks after end');x.time(2500);assert.equal(x.s.counts.miss,1);
-x=make(true);x.time(2500);assert.equal(x.s.counts.holdTicks,19);assert.equal(x.s.counts.perfect,21);assert.equal(x.s.accuracy(),1,'auto does not depend on physical isDown');
+x=make(true);x.time(2500);assert.equal(x.s.counts.holdTicks,19);assert.equal(x.s.counts.perfect,2);assert.equal(x.s.accuracy(),1,'auto does not depend on physical isDown');
 x=make();x.time(1200);assert.equal(x.s.counts.miss,2,'missed head and tail both count');assert.equal(x.s.accuracy(),0);
-x=make(false,70);x.press(1070);x.release(2070);assert.equal(x.s.counts.perfect,21,'head/body/tail share input offset');
+x=make(false,70);x.press(1070);x.release(2070);assert.equal(x.s.counts.perfect,2,'head/body/tail share input offset; ticks do not count as MAX');
 const fine=make(),coarse=make();fine.press(1000);coarse.press(1000);for(let t=1016;t<2000;t+=16)fine.time(t);coarse.time(1999);fine.release(2000);coarse.release(2000);assert.deepEqual(fine.s.counts,coarse.s.counts);assert.equal(fine.s.score,coarse.s.score);
 x=make();x.press(1000);x.time(1400);const count=x.s.counts.holdTicks;x.s.pause();x.time(1900);assert.equal(x.s.counts.holdTicks,count,'paused time gives no ticks');
 x=make(false,0,[{t:1000,col:0,end:2000},{t:3000,col:0,end:3100}]);x.press(1000);x.release(2000);x.press(3000);x.release(3100);assert.equal(x.s.counts.holdTicks,20,'tick state resets between holds');

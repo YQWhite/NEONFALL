@@ -7,6 +7,7 @@ import { AccountScreen } from './ui/screens/account.ts';
 import { ImportScreen } from './ui/screens/import.ts';
 import { PlayScreen } from './ui/screens/play.ts';
 import { ResultScreen } from './ui/screens/result.ts';
+import { RankingsScreen } from './ui/screens/rankings.ts';
 import { readNFM } from './core/nfm.ts';
 import { tr } from './ui/i18n.ts';
 import { scoreSync } from './api/score-sync.ts';
@@ -28,6 +29,7 @@ async function boot() {
   app.registerScreen('import', (a) => new ImportScreen(a));
   app.registerScreen('play', (a) => new PlayScreen(a));
   app.registerScreen('result', (a) => new ResultScreen(a));
+  app.registerScreen('rankings', (a) => new RankingsScreen(a));
 
   // platform wiring
   if (app.platform === 'android') {

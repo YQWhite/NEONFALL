@@ -8,6 +8,8 @@ const { promisify } = require('node:util');
 const { unzipSync, strFromU8 } = require('fflate');
 const { sendVerificationMail } = require('./smtp.js');
 const { inspectAvatar, MAX_AVATAR_BYTES } = require('./avatar.js');
+const { announcementOf, versionOf, checkReceipt, recordAttempt, chartStatistics, globalLeaderboard } = require('./community.js');
+const { scoreFromCounts, accuracyFromCounts, gradeFromAccuracy } = require('./scoring.js');
 const scrypt = promisify(crypto.scrypt);
 const ROOT = path.resolve(__dirname, '..');
 const DATA = path.resolve(process.env.NF_DATA_DIR || path.join(__dirname, 'data'));
@@ -36,8 +38,16 @@ function save(name, obj) {
   fs.writeFileSync(tmp, JSON.stringify(obj), { mode: 0o600 }); fs.renameSync(tmp, file);
 }
 const users = load('users', {}), scores = load('scores', []), owners = load('chart-owners', {});
+const community = load('community', { charts: {}, receipts: {} });
 if (!users || typeof users !== 'object' || Array.isArray(users) || !Array.isArray(scores) || !owners || typeof owners !== 'object') throw new Error('Invalid server database structure');
+if (!community || typeof community.charts !== 'object' || !community.charts || typeof community.receipts !== 'object' || !community.receipts) throw new Error('Invalid community database structure');
 const chartCache = new Map(), verification = new Map(), attempts = new Map();
+let currentAnnouncement = announcementOf({});
+function serverAnnouncement() {
+  // Editing this optional text file must not briefly take the API offline.
+  try { currentAnnouncement = announcementOf(load('server-info', {})); } catch { /* retain the last readable announcement */ }
+  return currentAnnouncement;
+}
 const ID = /^[a-f0-9]{40}$/i;
 const sha1 = bytes => crypto.createHash('sha1').update(bytes).digest('hex');
 const tokenHash = token => crypto.createHash('sha256').update(token).digest('hex');
@@ -103,14 +113,14 @@ const RATING_WEIGHT = (1 - .95 ** 100) / (1 - .95);
 function performancePoints(stars, acc, durationMs, mods = []) {
   if (![stars, acc, durationMs].every(Number.isFinite) || stars <= 0) return 0;
   const curve = Math.max(0, Math.min(1, (acc - .8) / .2)) ** 2;
-  const modFactor = mods.some(mod => /^constantspeed$/i.test(mod)) ? .9 : 1;
+  const modFactor = (mods.some(mod => /^constantspeed$/i.test(mod)) ? .9 : 1) * (mods.some(mod => /^notail$/i.test(mod)) ? .9 : 1);
   return Math.round(2.2 * Math.max(0, Math.min(13, stars)) ** 2 * curve * (1 + Math.max(0, Math.min(durationMs / 240000, 1)) * .25) * modFactor * 100) / 100;
 }
 function recompute(u) {
   const best = new Map();
   for (const score of scores.filter(s => s.username === u.username && rankedScore(s))) {
     const key = score.chartId + ':' + score.keys;
-    best.set(key, Math.max(best.get(key) || 0, Number.isFinite(score.pp) ? score.pp : 0));
+    best.set(key, Math.max(best.get(key) || 0, Number.isFinite(score.ratingPp) ? score.ratingPp : Number.isFinite(score.pp) ? score.pp : 0));
   }
   const pp = [...best.values()].sort((a, b) => b - a);
   u.rating = Math.round(pp.slice(0, 100).reduce((sum, p, i) => sum + p * .95 ** i, 0) / RATING_WEIGHT * 100) / 100; u.bestPp = pp[0] || 0; u.plays = best.size;
@@ -128,16 +138,28 @@ async function readBody(req, limit) {
 async function readJson(req) { const buf = await readBody(req, 65536); try { return JSON.parse(buf.toString('utf8')); } catch { throw httpError(400, 'invalid JSON body'); } }
 function json(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); }
 function scoreOf(body, meta, u) {
-  if (!body || body.keys !== meta.keys || !Number.isInteger(body.score) || body.score < 0 || body.score > meta.judgments * 3200 + meta.maxHoldTicks * 320 || !Number.isFinite(body.acc) || body.acc < 0 || body.acc > 1 || !Number.isInteger(body.maxCombo) || body.maxCombo < 0 || body.maxCombo > meta.judgments + meta.maxHoldTicks || typeof body.passed !== 'boolean' || !Array.isArray(body.mods) || body.mods.length > 16 || body.mods.some(m => typeof m !== 'string' || m.length > 40)) throw httpError(400, 'invalid score fields');
+  const modern = body?.scoreVersion === 2;
+  if (!body || body.scoreVersion !== undefined && body.scoreVersion !== 1 && !modern || body.keys !== meta.keys || !Number.isInteger(body.score) || body.score < 0 || body.score > (modern ? 1000000 : meta.judgments * 3200 + meta.maxHoldTicks * 320) || !Number.isFinite(body.acc) || body.acc < 0 || body.acc > 1 || !Number.isInteger(body.maxCombo) || body.maxCombo < 0 || body.maxCombo > meta.judgments + meta.maxHoldTicks || typeof body.passed !== 'boolean' || !Array.isArray(body.mods) || body.mods.length > 16 || body.mods.some(m => typeof m !== 'string' || m.length > 40)) throw httpError(400, 'invalid score fields');
+  if (modern && (typeof body.playId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(body.playId))) throw httpError(400, 'normalized scores require a valid playId');
+  if (!modern && body.mods.some(mod => /^notail$/i.test(mod))) throw httpError(400, 'NoTail requires scoreVersion 2');
+  if (body.failedAtMs !== undefined && (!modern || body.passed || !Number.isFinite(body.failedAtMs) || body.failedAtMs < 0 || body.failedAtMs > meta.lengthMs)) throw httpError(400, 'invalid failure position');
   if (!body.counts || ['perfect', 'great', 'good', 'ok', 'bad', 'miss', 'holdTicks'].some(k => !Number.isInteger(body.counts[k]) || body.counts[k] < 0 || body.counts[k] > 100000000)) throw httpError(400, 'invalid judgment counts');
   const total = ['perfect', 'great', 'good', 'ok', 'bad', 'miss'].reduce((n, k) => n + body.counts[k], 0);
-  if (body.counts.holdTicks > meta.maxHoldTicks || body.counts.perfect < body.counts.holdTicks || total - body.counts.holdTicks > meta.judgments || body.passed && total - body.counts.holdTicks !== meta.judgments) throw httpError(400, 'judgment count does not match chart');
-  const actualAcc = total ? (body.counts.perfect * 320 + body.counts.great * 300 + body.counts.good * 200 + body.counts.ok * 100 + body.counts.bad * 50) / (total * 320) : 1;
+  const judgmentTotal = total - (modern ? 0 : body.counts.holdTicks);
+  if (body.counts.holdTicks > meta.maxHoldTicks || !modern && body.counts.perfect < body.counts.holdTicks || judgmentTotal > meta.judgments || body.passed && judgmentTotal !== meta.judgments) throw httpError(400, 'judgment count does not match chart');
+  const actualAcc = modern ? accuracyFromCounts(body.counts) : total ? (body.counts.perfect * 320 + body.counts.great * 300 + body.counts.good * 200 + body.counts.ok * 100 + body.counts.bad * 50) / (total * 320) : 1;
   if (Math.abs(actualAcc - body.acc) > .000001) throw httpError(400, 'accuracy does not match judgment counts');
+  if (modern && scoreFromCounts(body.counts, meta.judgments, body.mods) !== body.score) throw httpError(400, 'normalized score does not match judgment counts');
   const ranked = body.passed && !body.mods.some(m => /^(auto|mirror|random)$/i.test(m));
   const pp = ranked ? performancePoints(meta.stars, body.acc, meta.lengthMs, body.mods) : 0;
-  const grade = !body.passed ? 'F' : body.acc >= .9999 && !body.counts.miss && !body.counts.bad && !body.counts.ok ? 'SS' : body.acc >= .95 ? 'S' : body.acc >= .9 ? 'A' : body.acc >= .8 ? 'B' : body.acc >= .7 ? 'C' : 'D';
-  return { username: u.username, chartId: meta.id, keys: meta.keys, title: meta.title, version: meta.version, stars: meta.stars, durationMs: meta.lengthMs, score: body.score, acc: body.acc, maxCombo: body.maxCombo, counts: body.counts, pp, grade, mods: body.mods, passed: body.passed, playedAt: Date.now() };
+  const grade = modern ? gradeFromAccuracy(body.acc, body.passed) : !body.passed ? 'F' : body.acc >= .9999 && !body.counts.miss && !body.counts.bad && !body.counts.ok ? 'SS' : body.acc >= .95 ? 'S' : body.acc >= .9 ? 'A' : body.acc >= .8 ? 'B' : body.acc >= .7 ? 'C' : 'D';
+  return { username: u.username, chartId: meta.id, keys: meta.keys, title: meta.title, version: meta.version, stars: meta.stars, durationMs: meta.lengthMs, score: body.score, acc: body.acc, maxCombo: body.maxCombo, counts: body.counts, pp, grade, mods: body.mods, passed: body.passed, playedAt: Date.now(), scoreVersion: modern ? 2 : 1, ...(modern ? { playId: body.playId } : {}), ...(body.failedAtMs !== undefined ? { failedAtMs: body.failedAtMs } : {}) };
+}
+function scoreTable(chart, keys, version) { return scores.filter(s => s.chartId === chart && s.keys === keys && versionOf(s) === version && rankedScore(s)).sort((a, b) => b.score - a.score || b.acc - a.acc || a.playedAt - b.playedAt); }
+function publicScore(score, index, user) {
+  const owner = users[score.username.toLowerCase()];
+  return { rank: index + 1, username: score.username, nickname: owner?.nickname || score.username, avatar: owner ? avatarUrl(owner) : undefined,
+    score: score.score, acc: score.acc, maxCombo: score.maxCombo, playedAt: score.playedAt, mods: [...score.mods], grade: score.grade, scoreVersion: versionOf(score), isSelf: score.username === user?.username };
 }
 const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'same-origin');
@@ -150,7 +172,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost'), p = decodeURIComponent(url.pathname), method = req.method;
     const u = authenticate(req), admin = isAdmin(req); const ok = (data, status = 200) => json(res, status, data);
-    if (p === '/api/ping' && method === 'GET') return ok({ ok: true, name: 'neonfall-server', version: '0.2.8', ratingVersion: 3, charts: listCharts().length, users: Object.keys(users).length, uploadPolicy: UPLOADS ? 'authenticated' : 'disabled', emailVerification: !!(mailConfig().enabled && mailConfig().host), avatars: true });
+    if (p === '/api/ping' && method === 'GET') return ok({ ok: true, name: 'neonfall-server', version: '0.2.9', ratingVersion: 4, scoreVersion: 2, statisticsVersion: 1, announcement: serverAnnouncement(), charts: listCharts().length, users: Object.keys(users).length, uploadPolicy: UPLOADS ? 'authenticated' : 'disabled', emailVerification: !!(mailConfig().enabled && mailConfig().host), avatars: true });
     if (p === '/api/register' && method === 'POST') {
       if (rateLimit(req, 'register', 10, 3600000)) throw httpError(429, 'too many registration attempts; try later'); const b = await readJson(req);
       if (!b || typeof b.username !== 'string' || !/^[A-Za-z0-9_]{3,16}$/.test(b.username)) throw httpError(400, 'username: 3-16 letters, digits or underscores');
@@ -160,7 +182,7 @@ const server = http.createServer(async (req, res) => {
       const key = b.username.toLowerCase(); if (Object.hasOwn(users, key) || ['__proto__', 'constructor', 'prototype'].includes(key)) throw httpError(409, 'username already taken');
       const salt = crypto.randomBytes(16).toString('hex'), passHash = (await scrypt(b.password, salt, 64)).toString('hex');
       if (Object.hasOwn(users, key)) throw httpError(409, 'username already taken');
-      const user = { username: b.username, nickname: b.nickname.trim(), email: b.email, emailVerified: false, passSalt: salt, passHash, createdAt: Date.now(), rating: 0, bestPp: 0, plays: 0, ratingVersion: 3 };
+      const user = { username: b.username, nickname: b.nickname.trim(), email: b.email, emailVerified: false, passSalt: salt, passHash, createdAt: Date.now(), rating: 0, bestPp: 0, plays: 0, ratingVersion: 4 };
       const token = newSession(user); users[key] = user; save('users', users); return ok({ ok: true, token, user: publicUser(user) }, 201);
     }
     if (p === '/api/login' && method === 'POST') {
@@ -243,18 +265,39 @@ const server = http.createServer(async (req, res) => {
       if (!u) throw httpError(401, 'not signed in'); if (rateLimit(req, 'score', 120, 3600000)) throw httpError(429, 'too many score submissions; try later');
       const b = await readJson(req), meta = chartMeta(String(b?.chartId || '')); if (!meta) throw httpError(404, 'chart is not in this repository');
       const score = scoreOf(b, meta, u);
-      if (!rankedScore(score)) return ok({ ok: true, rating: u.rating || 0, ranked: false });
-      const prev = scores.find(s => s.username === u.username && s.chartId === meta.id && s.keys === meta.keys);
-      if (!prev) scores.push(score); else if (!rankedScore(prev) || score.pp > prev.pp || score.pp === prev.pp && (score.acc > prev.acc || score.acc === prev.acc && score.score > prev.score)) Object.assign(prev, score);
+      if (checkReceipt(community, score)) return ok({ ok: true, rating: u.rating || 0, ranked: rankedScore(score), duplicate: true });
+      if (!rankedScore(score)) {
+        if (recordAttempt(community, score, meta.lengthMs)) save('community', community);
+        return ok({ ok: true, rating: u.rating || 0, ranked: false });
+      }
+      const prev = scores.find(s => s.username === u.username && s.chartId === meta.id && s.keys === meta.keys && versionOf(s) === versionOf(score));
+      if (!prev) scores.push(score);
+      else {
+        const ratingPp = Math.max(prev.ratingPp ?? prev.pp, score.pp), bestAcc = Math.max(prev.bestAcc ?? prev.acc, score.acc);
+        const better = score.scoreVersion === 2
+          ? score.score > prev.score || score.score === prev.score && score.acc > prev.acc
+          : score.pp > prev.pp || score.pp === prev.pp && (score.acc > prev.acc || score.acc === prev.acc && score.score > prev.score);
+        if (!rankedScore(prev) || better) Object.assign(prev, score);
+        prev.ratingPp = ratingPp; prev.bestAcc = bestAcc;
+      }
       recompute(u); save('scores', scores); save('users', users);
-      const ranked = scores.filter(s => s.chartId === meta.id && s.keys === meta.keys && rankedScore(s)).sort((a, b) => b.score - a.score); return ok({ ok: true, rating: u.rating, ranked: true, rank: ranked.findIndex(s => s.username === u.username) + 1 });
+      if (recordAttempt(community, score, meta.lengthMs)) save('community', community);
+      const ranked = scoreTable(meta.id, meta.keys, versionOf(score)); return ok({ ok: true, rating: u.rating, ranked: true, rank: ranked.findIndex(s => s.username === u.username) + 1 });
     }
     if (p === '/api/scores' && method === 'GET') {
       const chart = url.searchParams.get('chart') || '', keys = Number(url.searchParams.get('keys') || 4);
-      return ok(scores.filter(s => s.chartId === chart && s.keys === keys && rankedScore(s)).sort((a, b) => b.score - a.score).slice(0, 20).map((s, i) => ({ rank: i + 1, username: s.username, nickname: users[s.username.toLowerCase()]?.nickname || s.username, score: s.score, acc: s.acc, maxCombo: s.maxCombo, playedAt: s.playedAt, mods: [...s.mods], isSelf: s.username === u?.username })));
+      // Missing filter preserves the old API contract for older clients.
+      const version = url.searchParams.get('scoreVersion') === '2' ? 2 : 1;
+      return ok(scoreTable(chart, keys, version).slice(0, 20).map((s, i) => publicScore(s, i, u)));
+    }
+    if (p === '/api/chart-stats' && method === 'GET') {
+      const chart = url.searchParams.get('chart') || '', keys = Number(url.searchParams.get('keys') || 4), meta = chartMeta(chart);
+      if (!meta || meta.keys !== keys) throw httpError(404, 'chart is not in this repository');
+      const table = scoreTable(chart, keys, 2), ownIndex = u ? table.findIndex(s => s.username === u.username) : -1;
+      return ok({ ...chartStatistics(community, chart, keys), personalBest: ownIndex >= 0 ? publicScore(table[ownIndex], ownIndex, u) : null });
     }
     if (p === '/api/scores/mine' && method === 'GET') { if (!u) throw httpError(401, 'not signed in'); return ok(scores.filter(s => s.username === u.username).sort((a, b) => b.playedAt - a.playedAt).slice(0, 100)); }
-    if (p === '/api/leaderboard' && method === 'GET') return ok(Object.values(users).map(user => ({ username: user.username, nickname: user.nickname, rating: user.rating || 0, bestPp: user.bestPp || 0, avatar: avatarUrl(user) })).sort((a, b) => b.rating - a.rating).slice(0, 50));
+    if (p === '/api/leaderboard' && method === 'GET') return ok(globalLeaderboard(users, scores, url.searchParams.get('metric'), avatarUrl));
     if (p.startsWith('/api/')) throw httpError(404, 'API route not found'); if (method !== 'GET' && method !== 'HEAD') throw httpError(405, 'method not allowed');
     if (p.includes('\0') || p.includes('\\')) throw httpError(400, 'invalid path'); let full = path.resolve(DIST, '.' + (p === '/' ? '/index.html' : p));
     if (full !== DIST && !full.startsWith(DIST + path.sep)) throw httpError(403, 'forbidden path');
@@ -278,12 +321,12 @@ if (fs.existsSync(SEED) && !fs.readdirSync(CHARTS).some(f => f.endsWith('.nfm'))
 }
 // Re-rate historical scores at startup without changing their judgments or timestamps.
 // Deleted charts retain their last server-validated difficulty and length.
-if (Object.values(users).some(user => user.ratingVersion !== 3)) {
+if (Object.values(users).some(user => user.ratingVersion !== 4)) {
   for (const score of scores) {
     const meta = chartMeta(String(score.chartId || ''));
     score.pp = rankedScore(score) ? performancePoints(meta?.stars ?? score.stars, score.acc, meta?.lengthMs ?? score.durationMs, score.mods) : 0;
   }
-  for (const user of Object.values(users)) { recompute(user); user.ratingVersion = 3; }
+  for (const user of Object.values(users)) { recompute(user); user.ratingVersion = 4; }
   save('scores', scores); save('users', users);
 }
 server.on('error', e => { console.error('[server] could not listen:', e.code || e.name); process.exitCode = 1; });

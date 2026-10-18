@@ -278,7 +278,7 @@ await orderMusic.next(); assert.equal(orderMusic.entry.id, 'order-b');
 await orderMusic.next(); assert.equal(orderMusic.entry.id, 'order-c');
 await orderMusic.next(); assert.equal(orderMusic.entry.id, 'order-a', 'manual next wraps grouped list');
 orderMusic.setScreen('select'); const repeatingSource = orderAudio.previewSrc;
-for (const screen of ['select', 'settings', 'account', 'import']) {
+for (const screen of ['select', 'settings', 'account', 'import', 'rankings']) {
   orderMusic.setScreen(screen); ctx.currentTime += 31; orderMusic.update();
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(orderMusic.entry.id, 'order-a', `${screen}: inherit selected-recording loop`);

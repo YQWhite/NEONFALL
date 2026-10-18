@@ -114,7 +114,7 @@ held.s.retry(); check(held.s.phase, 'playing', 'retry after skipping resumes gam
 // Last tap must resolve its late judgment window before any outro action appears.
 const lateTap = make({ first: 1000 }); lateTap.at(1000); check(lateTap.s.canSkipOutro(), false, 'unjudged last tap blocks skip');
 lateTap.at(1128); check(lateTap.s.counts.miss, 1, 'late tap eventually misses'); check(lateTap.s.canSkipOutro(), true, 'missed final tap can end outro');
-const lateTail = make({ notes: [{ t: 1000, col: 0, end: 5000 }] }); lateTail.press(0, 1000); lateTail.at(5128);
+const lateTail = make({ notes: [{ t: 1000, col: 0, end: 5000 }] }); lateTail.press(0, 1000); lateTail.at(5155);
 check(lateTail.s.counts.miss, 1, 'unreleased tail eventually misses'); check(lateTail.s.canSkipOutro(), true, 'settled miss tail enables skip');
 
 // Actual mobile HUD button routes to the same safe skip operation.

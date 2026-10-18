@@ -31,7 +31,7 @@ x.press(0, 1000); x.at(4000); const ticks = x.s.counts.holdTicks, score = x.s.sc
 x.s.pause(); x.s.resume(); assert.equal(x.s.chartTime(), 1000);
 x.at(2500); x.release(0, 2600); assert.equal(x.s.counts.miss, 0, 'replayed hold releases are ignored');
 x.press(0, 3900); x.at(4000); assert.equal(x.s.counts.holdTicks, ticks); assert.equal(x.s.score, score);
-x.at(4500); assert.equal(x.s.counts.holdTicks, ticks + 10); x.release(0, 6000); assert.equal(x.s.counts.perfect, 101); assert.equal(x.s.counts.miss, 0);
+x.at(4500); assert.equal(x.s.counts.holdTicks, ticks + 10); x.release(0, 6000); assert.equal(x.s.counts.perfect, 2); assert.equal(x.s.counts.miss, 0);
 x.s.retry(); assert.equal(x.s.rewindRemainingMs(), 0); assert.equal(x.s.counts.perfect, 0); assert.equal(x.s.isHeld(0), false);
 
 x = make([{ t: 1000, col: 0, end: 6000 }]); x.press(0, 1000); x.at(4000); x.s.pause(); x.s.resume();

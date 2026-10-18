@@ -1,9 +1,7 @@
 import type { App } from './app.ts';
-import type { UserInfo } from '../core/types.ts';
-import type { LocalProfile } from '../core/store.ts';
 import { text } from './theme.ts';
 
-type Profile = UserInfo | LocalProfile | null;
+type Profile = { username: string; nickname: string; avatar?: string } | null;
 const avatars = new Map<string, HTMLImageElement | null>();
 const MAX_AVATARS = 24;
 

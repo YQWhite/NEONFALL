@@ -75,11 +75,18 @@ export interface LocalProfile {
   local: boolean;
 }
 
+export interface LocalChartStats {
+  attempts: number; passes: number; passRate: number | null;
+  failureBins: number[]; failureSamples: number;
+}
+
 const LS_SETTINGS = 'nf.settings.v1';
 const LS_CHARTMETA = 'nf.chartMeta.v1';
 const LS_SKINMETA = 'nf.skinMeta.v1';
 const LS_PROFILE = 'nf.profile.v1';
 const LS_SCORES = 'nf.scores.v1';
+const LS_HIGH_SCORES = 'nf.highscores.v2';
+const LS_CHART_STATS = 'nf.chart-stats.v1';
 const LS_TOKEN = 'nf.token.v1';
 
 function lsGet(key: string): any {
@@ -391,8 +398,68 @@ export class Store {
     return this.getBestScores()[chartId];
   }
 
+  /** Score PB is independent of the performance-point PB used by rating. */
+  getHighScores(): Record<string, PlayResult> {
+    const stored = lsGet(LS_HIGH_SCORES) || {}, results: Record<string, PlayResult> = {};
+    for (const [id, result] of Object.entries(this.getBestScores())) if (isRankedResult(result)) results[id] = result;
+    for (const [chartId, versions] of Object.entries(stored) as [string, Record<string, PlayResult>][]) {
+      const result = versions?.['2'] || versions?.['1'];
+      if (result) results[chartId] = result;
+    }
+    return results;
+  }
+
+  getHighScore(chartId: string): PlayResult | undefined { return this.getHighScores()[chartId]; }
+
+  getChartStats(chartId: string): LocalChartStats {
+    const saved = (lsGet(LS_CHART_STATS) || {})[chartId];
+    const attempts = Math.max(0, Number(saved?.attempts) || 0), passes = Math.max(0, Math.min(attempts, Number(saved?.passes) || 0));
+    const failureBins = Array.from({ length: 40 }, (_, i) => Math.max(0, Number(saved?.failureBins?.[i]) || 0));
+    return { attempts, passes, passRate: attempts ? passes / attempts : null, failureBins, failureSamples: failureBins.reduce((sum, count) => sum + count, 0) };
+  }
+
+  private recordAttempt(result: PlayResult) {
+    if (result.mods.some(mod => /^(auto|mirror|random)$/i.test(mod))) return;
+    const records = lsGet(LS_CHART_STATS) || {}, previous = records[result.chartId] || {};
+    const ids: string[] = Array.isArray(previous.ids) ? previous.ids : [];
+    const id = result.playId || `${result.playedAt}:${result.score}:${result.passed}`;
+    if (ids.includes(id)) return;
+    const stats = this.getChartStats(result.chartId);
+    stats.attempts++;
+    if (result.passed) stats.passes++;
+    else if (Number.isFinite(result.failedAtMs) && result.durationMs > 0) {
+      const bin = Math.max(0, Math.min(39, Math.floor(result.failedAtMs! / result.durationMs * 40)));
+      stats.failureBins[bin]++;
+    }
+    records[result.chartId] = { ...stats, ids: [...ids.slice(-255), id] };
+    lsSet(LS_CHART_STATS, records);
+  }
+
+  private recordHighScore(result: PlayResult) {
+    if (!isRankedResult(result)) return;
+    const stored = lsGet(LS_HIGH_SCORES) || {}, versions = stored[result.chartId] || {};
+    const version = result.scoreVersion === 2 ? '2' : '1';
+    const legacyBest = this.getBest(result.chartId);
+    let changed = false;
+    // Seed before submitLocalScore replaces the rating PB. This preserves the
+    // only known historical high score even when the incoming run has more pp.
+    if (legacyBest && isRankedResult(legacyBest)) {
+      const legacyVersion = legacyBest.scoreVersion === 2 ? '2' : '1', saved = versions[legacyVersion];
+      if (!saved || legacyBest.score > saved.score || legacyBest.score === saved.score && legacyBest.acc > saved.acc) {
+        versions[legacyVersion] = legacyBest; changed = true;
+      }
+    }
+    const previous: PlayResult | undefined = versions[version];
+    if (!previous || result.score > previous.score || result.score === previous.score && result.acc > previous.acc) {
+      versions[version] = result; changed = true;
+    }
+    if (changed) { stored[result.chartId] = versions; lsSet(LS_HIGH_SCORES, stored); }
+  }
+
   submitLocalScore(result: PlayResult): { rating: number; improved: boolean } {
     result.pp = resultPP(result);
+    this.recordAttempt(result);
+    this.recordHighScore(result);
     const scores = this.getBestScores();
     const prev = scores[result.chartId];
     let improved = false;

@@ -150,7 +150,8 @@ export function computePP(stars: number, acc: number, durationMs: number, mods: 
   // NEONFALL's accuracy curve rewards clean clears: a 90% clear earns only
   // 25% of perfect-play pp; below 80% it earns no performance points.
   const curve = Math.pow(clamp((accF - 0.8) / 0.2, 0, 1), 2);
-  const modFactor = mods.some(mod => /^constantspeed$/i.test(mod)) ? 0.9 : 1;
+  const modFactor = (mods.some(mod => /^constantspeed$/i.test(mod)) ? 0.9 : 1)
+    * (mods.some(mod => /^notail$/i.test(mod)) ? 0.9 : 1);
   const pp = 2.2 * Math.pow(clamp(stars, 0, 13), 2.0) * curve * lenFactor * modFactor;
   return Math.round(pp * 100) / 100;
 }

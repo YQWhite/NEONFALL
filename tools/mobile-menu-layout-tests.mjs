@@ -79,11 +79,12 @@ for (const [w, h] of [[568, 320], [640, 360], [780, 360], [844, 390], [960, 400]
   app.w = w; app.h = h;
   const menu = new classes.menu(app); menu.enter(); menu.t0 = -10000;
   draw(menu, 'menu');
-  const menuIds = ['menu-play', 'menu-settings', 'menu-account', 'menu-import', 'music-toggle', 'music-next', 'music-profile'];
+  const menuIds = ['menu-play', 'menu-rankings', 'menu-settings', 'menu-account', 'menu-import', 'music-toggle', 'music-next', 'music-profile'];
   bounded(menuIds); disjoint(menuIds);
   click(menu, 'menu-settings'); assert.equal(app.destination, 'settings');
 
   const select = new classes.select(app); select.entries = entries; select.schedulePreview = () => {}; select.applyFilter();
+  select.infoTab = 'details';
   draw(select, 'select');
   const selectIds = ['back', 'import', 'refresh', 'sort-cycle', 'key-0', 'key-4', 'key-5', 'key-6', 'key-7', 'key-8', 'play', 'mods', 'export', 'delete', 'music-toggle', 'music-next'];
   bounded(selectIds); disjoint(selectIds);
